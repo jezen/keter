@@ -66,6 +66,7 @@
                   ".cabal"
                   ".hs"
                   ".c"
+                  "LICENSE"
                 ];
               in
               hprev.callCabal2nix "keter" haskellSourceFilter { };
