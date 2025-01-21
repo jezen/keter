@@ -14,12 +14,12 @@ module Keter.Main
 
 import Control.Concurrent.Async (waitAny, withAsync)
 import Control.Exception (SomeException, bracket, throwIO, try)
-import Control.Monad (forM, unless, void, when)
+import Control.Monad (forM, forM_, unless, void, when)
 import Control.Monad.IO.Class (MonadIO, liftIO)
 import Control.Monad.IO.Unlift (MonadUnliftIO, withRunInIO)
 import Control.Monad.Logger (LoggingT, logInfo, runLoggingT)
 import Control.Monad.Logger qualified as L
-import Control.Monad.Reader (MonadReader, ReaderT, ask, runReaderT)
+import Control.Monad.Reader (MonadReader, ReaderT, ask, asks, runReaderT)
 import Data.Map qualified as Map
 import Data.String (fromString)
 import Data.Text qualified as T
