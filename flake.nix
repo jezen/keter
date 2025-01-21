@@ -65,6 +65,7 @@
                 haskellSourceFilter = prev.lib.sourceFilesBySuffices ./. [
                   ".cabal"
                   ".hs"
+                  ".c"
                 ];
               in
               hprev.callCabal2nix "keter" haskellSourceFilter { };
