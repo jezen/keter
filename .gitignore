@@ -21,3 +21,5 @@ log/
 .stack-work/
 cabal.sandbox.config
 *.sublime-*
+dist-newstyle/
+.pre-commit-config.yaml
