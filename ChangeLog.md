@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.2.0
+
+- **Dependency bounds:** Raised lower bound of `http-reverse-proxy` to `>= 0.6.2.0`.
+  This is to incorporate upstream fixes for handling malformed `X-Forwarded-For` headers.
+  Older versions of `http-reverse-proxy` are no longer supported. [315](https://github.com/snoyberg/keter/pull/315)
+
 ## 2.1.10
 - bump optparse applicative @jappeace
 - Fix reloading stuck on crash-looping bundles @ktak-007 [314](https://github.com/snoyberg/keter/pull/314)
