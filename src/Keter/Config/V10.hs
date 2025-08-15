@@ -4,6 +4,14 @@
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE TypeFamilies #-}
 
+-- | Keter config format V10.
+-- This version adds:
+--   - WebAppConfig.middleware :: [MiddlewareConfig]
+--     So webapp stanzas can declare edge middlewares (e.g., rate limiter)
+--     applied by Keter itself, without app code changes.
+--   - ProxyActionRaw.PAPort carries the middleware list for webapps, so the
+--     proxy layer can wrap a local reverse-proxy Application with those
+--     middlewares and achieve whole-app coverage.
 module Keter.Config.V10 where
 
 import Control.Applicative ((<|>))
@@ -218,10 +226,13 @@ data StanzaRaw port
 -- This datatype is very similar to Stanza, but is necessarily separate since:
 --
 -- 1. Webapps will be assigned ports.
---
 -- 2. Not all stanzas have an associated proxy action.
+--
+-- Note: PAPort now carries [MiddlewareConfig] so that Keter.Proxy can wrap a
+-- local reverse-proxy Application to the assigned port with a stanza-local
+-- middleware chain, achieving app-agnostic full coverage (e.g., rate limiting).
 data ProxyActionRaw
-    = PAPort Port !(Maybe Int)
+    = PAPort Port ![ MiddlewareConfig ] !(Maybe Int)
     | PAStatic StaticFilesConfig
     | PARedirect RedirectConfig
     | PAReverseProxy ReverseProxyConfig ![ MiddlewareConfig ] !(Maybe Int)
@@ -387,6 +398,11 @@ instance ToJSON RedirectDest where
 
 type IsSecure = Bool
 
+-- | WebAppConfig now contains a 'middleware' field. These middlewares are
+-- compiled and applied by Keter.Proxy around a local reverse proxy that
+-- forwards to the app's dynamically assigned port. This lets you enforce
+-- edge concerns (like rate limiting) for the whole app without touching
+-- the app code.
 data WebAppConfig port = WebAppConfig
     { waconfigExec        :: !F.FilePath
     , waconfigArgs        :: !(Vector Text)
@@ -401,6 +417,9 @@ data WebAppConfig port = WebAppConfig
      -- | how long in microseconds the app gets before we expect it to bind to
      --   a port (default 90 seconds)
     , waconfigEnsureAliveTimeout :: !(Maybe Int)
+     -- | stanza-local WAI middlewares applied by Keter (e.g., rate limiter).
+     -- Parsed from YAML key "middleware". Default: [].
+    , waconfigMiddleware  :: ![ MiddlewareConfig ]
     }
     deriving Show
 
@@ -417,6 +436,7 @@ instance ToCurrent (WebAppConfig ()) where
         , waconfigForwardEnv = Set.empty
         , waconfigTimeout = Nothing
         , waconfigEnsureAliveTimeout = Nothing
+        , waconfigMiddleware = []
         }
 
 instance ParseYamlFile (WebAppConfig ()) where
@@ -441,6 +461,7 @@ instance ParseYamlFile (WebAppConfig ()) where
             <*> o .:? "forward-env" .!= Set.empty
             <*> o .:? "connection-time-bound"
             <*> o .:? "ensure-alive-time-bound"
+            <*> o .:? "middleware" .!= []
 
 instance ToJSON (WebAppConfig ()) where
     toJSON WebAppConfig {..} = object
@@ -451,6 +472,8 @@ instance ToJSON (WebAppConfig ()) where
         , "ssl" .= waconfigSsl
         , "forward-env" .= waconfigForwardEnv
         , "connection-time-bound" .= waconfigTimeout
+        , "ensure-alive-time-bound" .= waconfigEnsureAliveTimeout
+        , "middleware" .= waconfigMiddleware
         ]
 
 data AppInput = AIBundle !FilePath !EpochTime

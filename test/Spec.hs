@@ -5,6 +5,7 @@ module Main where
 
 import Control.Concurrent (forkIO, threadDelay)
 import Control.Concurrent.STM.TQueue
+--import Control.Lens ((&), (.~), (^.))  -- Add lens imports for wreq
 import Control.Monad
 import Control.Monad.Logger
 import Control.Monad.Reader
@@ -24,6 +25,9 @@ import Network.Wreq qualified as Wreq
 import Test.Tasty
 import Test.Tasty.HUnit
 
+import qualified Keter.Proxy.MiddlewareSpec as ProxyMW
+
+
 main :: IO ()
 main = defaultMain keterTests
 
@@ -34,6 +38,7 @@ keterTests =
     [ testCase "Subdomain Integrity" caseSubdomainIntegrity
     , testCase "Wildcard Domains" caseWildcards
     , testCase "Head then post doesn't crash" headThenPostNoCrash
+    , ProxyMW.tests
     ]
 
 caseSubdomainIntegrity :: IO ()
@@ -90,7 +95,7 @@ headThenPostNoCrash = do
 
     settings :: Manager -> ProxySettings
     settings manager = MkProxySettings {
-        psHostLookup     = const $ pure $ Just ((PAPort 6781 Nothing, False), error "unused tls certificate")
+        psHostLookup     = const $ pure $ Just ((PAPort 6781 [] Nothing, False), error "unused tls certificate")
       , psManager        = manager
       , psUnknownHost    = const ""
       , psMissingHost    = ""

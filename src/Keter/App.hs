@@ -7,6 +7,11 @@
 {-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeFamilies #-}
 
+-- | Application lifecycle for a Keter bundle.
+-- This module wires config stanzas into runtime actions. Key note:
+--   - For WebApp stanzas we now carry a middleware list into PAPort
+--     (see V10.ProxyActionRaw), so the proxy layer can apply edge middlewares
+--     to the whole app without modifying the app code.
 module Keter.App
     ( start
     , reload
@@ -122,13 +127,21 @@ withActions :: BundleConfig
 withActions bconfig f =
     loop (V.toList $ bconfigStanzas bconfig) [] [] Map.empty
   where
-    -- todo: add loading from relative location
+    -- Load TLS credentials for a stanza if applicable (SNI).
+    -- TODO: add loading from a relative location if needed.
     loadCert (SSL certFile chainCertFiles keyFile) =
          either (const mempty) (TLS.Credentials . (:[]))
             <$> TLS.credentialLoadX509Chain certFile (V.toList chainCertFiles) keyFile
     loadCert _ = return mempty
 
     loop [] wacs backs actions = f wacs backs actions
+
+    -- WebApp stanza:
+    --   - We allocate a dynamic port for the app.
+    --   - We attach (PAPort port mids timeout) for every vhost this stanza serves.
+    --     'mids' comes from the stanza's "middleware" in YAML and will be
+    --     applied by Keter.Proxy around a local reverse-proxy to this port.
+    --     This gives whole-app, app-agnostic coverage (e.g., rate limiting).
     loop (Stanza (StanzaWebApp wac) rs:stanzas) wacs backs actions = do
       AppStartConfig{..} <- ask
       withRunInIO $ \rio ->
@@ -141,9 +154,11 @@ withActions bconfig f =
               stanzas
               (wac { waconfigPort = port } : wacs)
               backs
-              (Map.unions $ actions : map (\host -> Map.singleton host ((PAPort port (waconfigTimeout wac), rs), cert)) hosts))
+              (Map.unions $ actions : map (\host -> Map.singleton host ((PAPort port (waconfigMiddleware wac) (waconfigTimeout wac), rs), cert)) hosts))
       where
         hosts = Set.toList $ Set.insert (waconfigApprootHost wac) (waconfigHosts wac)
+
+    -- Static files stanza: attach PAStatic; middleware is handled in Keter.Proxy.
     loop (Stanza (StanzaStaticFiles sfc) rs:stanzas) wacs backs actions0 = do
         cert <- liftIO $ loadCert $ sfconfigSsl sfc
         loop stanzas wacs backs (actions cert)
@@ -152,6 +167,8 @@ withActions bconfig f =
                 $ actions0
                 : map (\host -> Map.singleton host ((PAStatic sfc, rs), cert))
                   (Set.toList (sfconfigHosts sfc))
+
+    -- Redirect stanza: attach PARedirect; no middleware applied here.
     loop (Stanza (StanzaRedirect red) rs:stanzas) wacs backs actions0 = do
         cert <- liftIO $ loadCert $ redirconfigSsl red
         loop stanzas wacs backs (actions cert)
@@ -160,11 +177,15 @@ withActions bconfig f =
                 $ actions0
                 : map (\host -> Map.singleton host ((PARedirect red, rs), cert))
                   (Set.toList (redirconfigHosts red))
+
+    -- Reverse-proxy stanza: attach PAReverseProxy with its middleware list.
     loop (Stanza (StanzaReverseProxy rev mid to) rs:stanzas) wacs backs actions0 = do
         cert <- liftIO $ loadCert $ reversingUseSSL rev
         loop stanzas wacs backs (actions cert)
       where
         actions cert = Map.insert (CI.mk $ reversingHost rev) ((PAReverseProxy rev mid to, rs), cert) actions0
+
+    -- Background tasks: accumulate only; no proxy action.
     loop (Stanza (StanzaBackground back) _:stanzas) wacs backs actions =
         loop stanzas wacs (back:backs) actions
 

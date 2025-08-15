@@ -1,6 +1,12 @@
 cabal-version:      3.0
 name:               keter
+<<<<<<< HEAD
+version:            2.3.0
+||||||| 7a97159
+version:            2.1.10
+=======
 version:            2.2.0
+>>>>>>> f5874e49dcf533f0df289e3f1df90f1a43ddcd7b
 synopsis:
   Web application deployment manager, focusing on Haskell web frameworks. It mitigates downtime.
 
@@ -47,6 +53,7 @@ library
     , http-reverse-proxy    >=0.6.2    && <0.7
     , http-types            >=0.12.3   && <0.13
     , indexed-traversable   >=0.1.2    && <0.2
+    , keter-rate-limiting-plugin >=0.1.1 && <2
     , lifted-base           >=0.2.3    && <0.3
     , monad-logger          >=0.3.0    && <0.4.0
     , mtl                   >=2.2.2    && <2.3     || ^>=2.3.1
@@ -128,8 +135,10 @@ test-suite test
   hs-source-dirs:     test
   default-extensions: ImportQualifiedPost
   main-is:            Spec.hs
+  other-modules:      Keter.Proxy.MiddlewareSpec
   type:               exitcode-stdio-1.0
   build-depends:
+    , aeson
     , base
     , bytestring
     , conduit
@@ -138,12 +147,14 @@ test-suite test
     , http-types
     , HUnit
     , keter
+    , keter-rate-limiting-plugin
     , lens
     , monad-logger
     , mtl
     , stm
     , tasty
     , tasty-hunit
+    , tls
     , transformers
     , unix
     , wai
