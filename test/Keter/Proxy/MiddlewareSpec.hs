@@ -4,6 +4,7 @@
 module Keter.Proxy.MiddlewareSpec (tests) where
 
 import Control.Concurrent (forkIO, threadDelay)
+import Control.Concurrent.STM (newTVarIO)
 import Control.Exception (try)
 import Control.Lens ((&), (.~), (^.))
 import Control.Monad (void)
@@ -12,6 +13,7 @@ import Control.Monad.Reader
 import Data.Aeson (eitherDecode)
 import qualified Data.ByteString.Lazy.Char8 as LBS
 import Data.ByteString (ByteString)
+import qualified Data.HashMap.Strict as HM
 import Keter.Config.Middleware (MiddlewareConfig)
 import Keter.Config.V10
 import Keter.Context
@@ -56,9 +58,12 @@ mkSettings
   -> Bool                   -- ip-from-header
   -> Maybe ByteString       -- healthcheck-path
   -> ByteString             -- proxy-exception body
-  -> ProxySettings
-mkSettings manager hostLookup useHeader mHealth exBody =
-  MkProxySettings
+  -> IO ProxySettings
+mkSettings manager hostLookup useHeader mHealth exBody = do
+  -- Now we can construct MiddlewareCache since it's exported from Keter.Proxy
+  middlewareCache <- MiddlewareCache <$> newTVarIO HM.empty
+  
+  pure $ MkProxySettings
     { psHostLookup     = hostLookup
     , psManager        = manager
     , psUnknownHost    = const ""
@@ -67,6 +72,7 @@ mkSettings manager hostLookup useHeader mHealth exBody =
     , psIpFromHeader   = useHeader
     , psConnectionTimeBound = 5 * 60 * 1000
     , psHealthcheckPath = mHealth
+    , psMiddlewareCache = middlewareCache
     }
 
 decodeMids :: LBS.ByteString -> [MiddlewareConfig]
@@ -109,7 +115,7 @@ caseRateLimitFixedWindow = do
         -- If you still have PAPort port (Maybe Int) only, remove this test or upgrade PAPort.
         return $ Just ((PAPort backendPort mids Nothing, False), mempty)
 
-      settings = mkSettings manager hostLookup False Nothing "proxy error"
+  settings <- mkSettings manager hostLookup False Nothing "proxy error"  -- Now use <- since it returns IO
   runProxyOn manager settings proxyPort
   threadDelay 200_000
 
@@ -153,7 +159,7 @@ caseIpFromHeaderTrue = do
 
   let host = "xff.test"
       hostLookup _ = return $ Just ((PAPort backendPort mids Nothing, False), mempty)
-      settings = mkSettings manager hostLookup True Nothing "proxy error"
+  settings <- mkSettings manager hostLookup True Nothing "proxy error"  -- Now use <- since it returns IO
   runProxyOn manager settings proxyPort
   threadDelay 200_000
 
@@ -188,7 +194,7 @@ caseHealthcheckBypass = do
 
   let host = "hc.test"
       hostLookup _ = return $ Just ((PAPort backendPort [] Nothing, False), mempty)
-      settings = mkSettings manager hostLookup False (Just "/keter-health") "proxy error"
+  settings <- mkSettings manager hostLookup False (Just "/keter-health") "proxy error"  -- Now use <- since it returns IO
 
   runProxyOn manager settings proxyPort
   threadDelay 200_000
@@ -207,7 +213,7 @@ caseProxyExceptionBody = do
   let host = "down.test"
       hostLookup _ = return $ Just ((PAPort 59999 [] Nothing, False), mempty) -- no backend here
       exBody = "my branded proxy error"
-      settings = mkSettings manager hostLookup False Nothing exBody
+  settings <- mkSettings manager hostLookup False Nothing exBody  -- Now use <- since it returns IO
 
   runProxyOn manager settings proxyPort
   threadDelay 200_000

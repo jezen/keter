@@ -4,13 +4,14 @@
 module Main where
 
 import Control.Concurrent (forkIO, threadDelay)
+import Control.Concurrent.STM (newTVarIO)
 import Control.Concurrent.STM.TQueue
---import Control.Lens ((&), (.~), (^.))  -- Add lens imports for wreq
 import Control.Monad
 import Control.Monad.Logger
 import Control.Monad.Reader
 import Control.Monad.STM
 import Data.ByteString (ByteString)
+import qualified Data.HashMap.Strict as HM
 import Data.Maybe (isJust)
 import Keter.Config.V10
 import Keter.Context
@@ -69,8 +70,10 @@ headThenPostNoCrash = do
       void $ Wai.strictRequestBody req
       resp $ Wai.responseLBS ok200 [] "ok"
 
+  settings' <- settings manager  -- Now use <- since settings returns IO
+
   _ <- forkIO $
-    flip runReaderT (settings manager) $
+    flip runReaderT settings' $
       flip runLoggingT (\_ _ _ msg -> atomically $ writeTQueue exceptions msg) $
         filterLogger isException $
           runKeterM $
@@ -93,14 +96,17 @@ headThenPostNoCrash = do
     isException _ LevelError = True
     isException _ _ = False
 
-    settings :: Manager -> ProxySettings
-    settings manager = MkProxySettings {
-        psHostLookup     = const $ pure $ Just ((PAPort 6781 [] Nothing, False), error "unused tls certificate")
-      , psManager        = manager
-      , psUnknownHost    = const ""
-      , psMissingHost    = ""
-      , psProxyException = ""
-      , psIpFromHeader   = False
-      , psConnectionTimeBound = 5 * 60 * 1000
-      , psHealthcheckPath = Nothing
-      }
+    settings :: Manager -> IO ProxySettings  -- Now returns IO ProxySettings
+    settings manager = do
+      middlewareCache <- MiddlewareCache <$> newTVarIO HM.empty
+      pure $ MkProxySettings {
+          psHostLookup     = const $ pure $ Just ((PAPort 6781 [] Nothing, False), error "unused tls certificate")
+        , psManager        = manager
+        , psUnknownHost    = const ""
+        , psMissingHost    = ""
+        , psProxyException = ""
+        , psIpFromHeader   = False
+        , psConnectionTimeBound = 5 * 60 * 1000
+        , psHealthcheckPath = Nothing
+        , psMiddlewareCache = middlewareCache
+        }

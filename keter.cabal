@@ -153,6 +153,7 @@ test-suite test
     , tls
     , transformers
     , unix
+    , unordered-containers
     , wai
     , warp
     , wreq
