@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.3.0
+
+- Add integration with keter-rate-limiting-plugin. [301](https://github.com/snoyberg/keter/issues/301)
+- Change some function signatures in dependent modules for integration.
+- Some documentation improvements.
+
 ## 2.2.0
 
 - **Dependency bounds:** Raised lower bound of `http-reverse-proxy` to `>= 0.6.2.0`.
