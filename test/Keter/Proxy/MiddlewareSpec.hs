@@ -5,11 +5,10 @@ module Keter.Proxy.MiddlewareSpec (tests) where
 
 import Control.Concurrent (forkIO, threadDelay)
 import Control.Exception (try)
-import Control.Lens ((&), (.~), (^.))  -- Add this import
---import Control.Monad (void)
+import Control.Lens ((&), (.~), (^.))
+import Control.Monad (void)
 import Control.Monad.Logger
 import Control.Monad.Reader
---import Control.Monad.STM
 import Data.Aeson (eitherDecode)
 import qualified Data.ByteString.Lazy.Char8 as LBS
 import Data.ByteString (ByteString)

@@ -21,13 +21,10 @@ import Network.Wai.Middleware.Local (local)
 import Network.Wai.Middleware.MethodOverride (methodOverride)
 import Network.Wai.Middleware.MethodOverridePost (methodOverridePost)
 
-import Data.Aeson.Types (Parser)
 import qualified Data.ByteString as S
 import qualified Data.ByteString.Lazy as L
 
 import Data.String (fromString)
-import Data.Text (Text)
-import qualified Data.Text as Tx
 import qualified Data.Text.Encoding as T
 import qualified Data.Text.Lazy.Encoding as TL
 import qualified Keter.Aeson.KeyHelper as AK (empty, toKey, toList, toText)
