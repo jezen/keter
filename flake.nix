@@ -68,6 +68,15 @@
 
             tar = hprev.tar_0_6_3_0;
 
+            # Add keter-rate-limiting-plugin from Hackage
+            keter-rate-limiting-plugin = hprev.callHackageDirect
+              {
+                pkg = "keter-rate-limiting-plugin";
+                ver = "0.1.1.0";
+                sha256 = prev.lib.fakeHash;
+              }
+              { };
+
             keter =
               let
                 haskellSourceFilter = prev.lib.sourceFilesBySuffices ./. [
