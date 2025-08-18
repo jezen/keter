@@ -26,5 +26,3 @@ dist-newstyle/
 .pre-commit-config.yaml
 result
 .nixos-test-history
-cabal.project.local~
-
