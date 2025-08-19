@@ -8,6 +8,7 @@ module Keter.Proxy
     ( reverseProxy
     , makeSettings
     , ProxySettings(..)
+    , TLSConfig (..)
     , MiddlewareCache(..)
     ) where
 
@@ -15,7 +16,6 @@ import Blaze.ByteString.Builder (copyByteString, toByteString)
 import Blaze.ByteString.Builder.Html.Word (fromHtmlEscapedByteString)
 import Control.Applicative ((<|>))
 import Control.Exception (SomeException)
---import Control.Monad (void)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.IO.Unlift (withRunInIO)
 import Control.Monad.Logger

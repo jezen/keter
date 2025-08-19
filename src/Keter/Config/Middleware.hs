@@ -29,10 +29,11 @@ import qualified Data.Text.Encoding as T
 import qualified Data.Text.Lazy.Encoding as TL
 import qualified Keter.Aeson.KeyHelper as AK (empty, toKey, toList, toText)
 
--- Rate limiter
+-- Rate limiter (updated API: buildEnvFromConfig + buildRateLimiterWithEnv)
 import Keter.RateLimiter.WAI
   ( RateLimiterConfig(..)
-  , buildRateLimiter
+  , buildEnvFromConfig
+  , buildRateLimiterWithEnv
   )
 --------------------------------------------------------------------------------
 -- Middleware config + RateLimiter
@@ -143,4 +144,7 @@ toMiddlewareIO (Local s c)        = pure $ local (responseLBS (toEnum s) [] c)
 toMiddlewareIO (BasicAuth realm cred) =
   pure $ basicAuth (\u p -> pure $ (Just p ==) $ lookup u cred) (fromString realm)
 toMiddlewareIO (AddHeaders headers) = pure $ addHeaders headers
-toMiddlewareIO (RateLimiter rl)     = buildRateLimiter rl
+-- Important: build Env once and return a pure Middleware, no per-request setup.
+toMiddlewareIO (RateLimiter rl) = do
+  env <- buildEnvFromConfig rl
+  pure (buildRateLimiterWithEnv env)
