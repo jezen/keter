@@ -30,6 +30,7 @@ import Control.Monad.IO.Unlift (withRunInIO)
 import Control.Monad.Logger
 import Control.Monad.Reader (ask)
 import Data.CaseInsensitive qualified as CI
+import Data.HashMap.Strict qualified as HM
 import Data.Foldable (for_)
 import Data.IORef
 import Data.Map (Map)
@@ -109,22 +110,24 @@ withConfig aid (AIBundle fp modtime) f = do
             rio $ f (Just newdir) bconfig (Just modtime)
 
 withReservations :: AppId
+                 -> MiddlewareCache
                  -> BundleConfig
-                 -> ([WebAppConfig Port] -> [BackgroundConfig] -> Map Host (ProxyAction, TLS.Credentials) -> KeterM AppStartConfig a)
+                 -> ([WebAppConfig Port] -> [BackgroundConfig] -> Map Host (ProxyAction, TLS.Credentials, MiddlewareCache) -> KeterM AppStartConfig a)
                  -> KeterM AppStartConfig a
-withReservations aid bconfig f = do
+withReservations aid appCache bconfig f = do
     AppStartConfig{..} <- ask
-    withActions bconfig $ \wacs backs actions ->
+    withActions appCache bconfig $ \wacs backs actions ->
         withRunInIO $ \rio ->
             bracketOnError
               (rio $ withMappedConfig (const ascHostManager) $ reserveHosts aid $ Map.keysSet actions)
               (rio . withMappedConfig (const ascHostManager) . forgetReservations aid)
               (\_ -> rio $ f wacs backs actions)
 
-withActions :: BundleConfig
-            -> ([ WebAppConfig Port] -> [BackgroundConfig] -> Map Host (ProxyAction, TLS.Credentials) -> KeterM AppStartConfig a)
+withActions :: MiddlewareCache
+            -> BundleConfig
+            -> ([ WebAppConfig Port] -> [BackgroundConfig] -> Map Host (ProxyAction, TLS.Credentials, MiddlewareCache) -> KeterM AppStartConfig a)
             -> KeterM AppStartConfig a
-withActions bconfig f =
+withActions appCache bconfig f =
     loop (V.toList $ bconfigStanzas bconfig) [] [] Map.empty
   where
     -- Load TLS credentials for a stanza if applicable (SNI).
@@ -136,12 +139,6 @@ withActions bconfig f =
 
     loop [] wacs backs actions = f wacs backs actions
 
-    -- WebApp stanza:
-    --   - We allocate a dynamic port for the app.
-    --   - We attach (PAPort port mids timeout) for every vhost this stanza serves.
-    --     'mids' comes from the stanza's "middleware" in YAML and will be
-    --     applied by Keter.Proxy around a local reverse-proxy to this port.
-    --     This gives whole-app, app-agnostic coverage (e.g., rate limiting).
     loop (Stanza (StanzaWebApp wac) rs:stanzas) wacs backs actions = do
       AppStartConfig{..} <- ask
       withRunInIO $ \rio ->
@@ -154,42 +151,37 @@ withActions bconfig f =
               stanzas
               (wac { waconfigPort = port } : wacs)
               backs
-              (Map.unions $ actions : map (\host -> Map.singleton host ((PAPort port (waconfigMiddleware wac) (waconfigTimeout wac), rs), cert)) hosts))
+              (Map.unions $ actions : map (\host -> Map.singleton host ((PAPort port (waconfigMiddleware wac) (waconfigTimeout wac), rs), cert, appCache)) hosts))
       where
         hosts = Set.toList $ Set.insert (waconfigApprootHost wac) (waconfigHosts wac)
 
-    -- Static files stanza: attach PAStatic; middleware is handled in Keter.Proxy.
     loop (Stanza (StanzaStaticFiles sfc) rs:stanzas) wacs backs actions0 = do
         cert <- liftIO $ loadCert $ sfconfigSsl sfc
         loop stanzas wacs backs (actions cert)
       where
         actions cert = Map.unions
                 $ actions0
-                : map (\host -> Map.singleton host ((PAStatic sfc, rs), cert))
+                : map (\host -> Map.singleton host ((PAStatic sfc, rs), cert, appCache))
                   (Set.toList (sfconfigHosts sfc))
 
-    -- Redirect stanza: attach PARedirect; no middleware applied here.
     loop (Stanza (StanzaRedirect red) rs:stanzas) wacs backs actions0 = do
         cert <- liftIO $ loadCert $ redirconfigSsl red
         loop stanzas wacs backs (actions cert)
       where
         actions cert = Map.unions
                 $ actions0
-                : map (\host -> Map.singleton host ((PARedirect red, rs), cert))
+                : map (\host -> Map.singleton host ((PARedirect red, rs), cert, appCache))
                   (Set.toList (redirconfigHosts red))
 
-    -- Reverse-proxy stanza: attach PAReverseProxy with its middleware list.
     loop (Stanza (StanzaReverseProxy rev mid to) rs:stanzas) wacs backs actions0 = do
         cert <- liftIO $ loadCert $ reversingUseSSL rev
         loop stanzas wacs backs (actions cert)
       where
-        actions cert = Map.insert (CI.mk $ reversingHost rev) ((PAReverseProxy rev mid to, rs), cert) actions0
+        actions cert = Map.insert (CI.mk $ reversingHost rev) ((PAReverseProxy rev mid to, rs), cert, appCache) actions0
 
-    -- Background tasks: accumulate only; no proxy action.
     loop (Stanza (StanzaBackground back) _:stanzas) wacs backs actions =
         loop stanzas wacs (back:backs) actions
 
--- | Gives the log file or log tag name for a given 'AppId'
 appLogName :: AppId -> String
 appLogName AIBuiltin = "__builtin__"
 appLogName (AINamed x) = "app-" <> unpack x
@@ -243,23 +235,25 @@ start :: AppId
 start aid input tstate =
     withLogger aid Nothing $ \tAppLogger appLogger ->
     withConfig aid input $ \newdir bconfig mmodtime ->
-    withSanityChecks bconfig $
-    withReservations aid bconfig $ \webapps backs actions ->
-    withBackgroundApps aid bconfig newdir appLogger backs $ \runningBacks ->
-    withWebApps aid bconfig newdir appLogger webapps $ \runningWebapps -> do
-        asc@AppStartConfig{..} <- ask
-        liftIO $ mapM_ (ensureAlive tstate) runningWebapps
-        withMappedConfig (const ascHostManager) $ activateApp aid actions
-        liftIO $
-          App
-            <$> newTVarIO mmodtime
-            <*> newTVarIO runningWebapps
-            <*> newTVarIO runningBacks
-            <*> return aid
-            <*> newTVarIO (Map.keysSet actions)
-            <*> newTVarIO newdir
-            <*> return asc
-            <*> return tAppLogger
+    withSanityChecks bconfig $ do
+      -- Create a fresh per-app-instance middleware cache
+      appCache <- liftIO $ MiddlewareCache <$> newTVarIO HM.empty
+      withReservations aid appCache bconfig $ \webapps backs actions ->
+        withBackgroundApps aid bconfig newdir appLogger backs $ \runningBacks ->
+        withWebApps aid bconfig newdir appLogger webapps $ \runningWebapps -> do
+            asc@AppStartConfig{..} <- ask
+            liftIO $ mapM_ (ensureAlive tstate) runningWebapps
+            withMappedConfig (const ascHostManager) $ activateApp aid actions
+            liftIO $
+              App
+                <$> newTVarIO mmodtime
+                <*> newTVarIO runningWebapps
+                <*> newTVarIO runningBacks
+                <*> return aid
+                <*> newTVarIO (Map.keysSet actions)
+                <*> newTVarIO newdir
+                <*> return asc
+                <*> return tAppLogger
 
 bracketedMap :: (a -> (b -> IO c) -> IO c)
              -> ([b] -> IO c)
@@ -598,28 +592,31 @@ reload input tstate = do
     withMappedConfig (const appAsc) $
       withLogger appId (Just appLog) $ \_ appLogger ->
       withConfig appId input $ \newdir bconfig mmodtime ->
-      withSanityChecks bconfig $
-      withReservations appId bconfig $ \webapps backs actions ->
-      withBackgroundApps appId bconfig newdir appLogger backs $ \runningBacks ->
-      withWebApps appId bconfig newdir appLogger webapps $ \runningWebapps -> do
-          liftIO $ mapM_ (ensureAlive tstate) runningWebapps
-          liftIO (readTVarIO appHosts) >>= \hosts ->
-            withMappedConfig (const $ ascHostManager appAsc) $
-              reactivateApp appId actions hosts
-          (oldApps, oldBacks, oldDir, oldRlog) <- liftIO $ atomically $ do
-              oldApps <- readTVar appRunningWebApps
-              oldBacks <- readTVar appBackgroundApps
-              oldDir <- readTVar appDir
-              oldRlog <- readTVar appLog
+      withSanityChecks bconfig $ do
+        -- Fresh per-app-instance cache for the new version
+        appCache <- liftIO $ MiddlewareCache <$> newTVarIO HM.empty
+        -- Start the do-block inside the first continuation to avoid bracket issues
+        withReservations appId appCache bconfig $ \webapps backs actions -> do
+          withBackgroundApps appId bconfig newdir appLogger backs $ \runningBacks ->
+            withWebApps appId bconfig newdir appLogger webapps $ \runningWebapps -> do
+              liftIO $ mapM_ (ensureAlive tstate) runningWebapps
+              liftIO (readTVarIO appHosts) >>= \hosts ->
+                withMappedConfig (const $ ascHostManager appAsc) $
+                  reactivateApp appId actions hosts
+              (oldApps, oldBacks, oldDir, oldRlog) <- liftIO $ atomically $ do
+                  oldApps <- readTVar appRunningWebApps
+                  oldBacks <- readTVar appBackgroundApps
+                  oldDir <- readTVar appDir
+                  oldRlog <- readTVar appLog
 
-              writeTVar appModTime mmodtime
-              writeTVar appRunningWebApps runningWebapps
-              writeTVar appBackgroundApps runningBacks
-              writeTVar appHosts $ Map.keysSet actions
-              writeTVar appDir newdir
-              return (oldApps, oldBacks, oldDir, oldRlog)
-          void $ withRunInIO $ \rio ->
-            forkIO $ rio $ terminateHelper appId oldApps oldBacks oldDir oldRlog
+                  writeTVar appModTime mmodtime
+                  writeTVar appRunningWebApps runningWebapps
+                  writeTVar appBackgroundApps runningBacks
+                  writeTVar appHosts $ Map.keysSet actions
+                  writeTVar appDir newdir
+                  return (oldApps, oldBacks, oldDir, oldRlog)
+              void $ withRunInIO $ \rio ->
+                forkIO $ rio $ terminateHelper appId oldApps oldBacks oldDir oldRlog
 
 terminate :: KeterM App ()
 terminate = do

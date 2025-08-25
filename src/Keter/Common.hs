@@ -6,6 +6,7 @@
 module Keter.Common where
 
 import Control.Exception (Exception)
+import Control.Concurrent.STM (TVar)
 import Data.Aeson
        ( FromJSON
        , Object
@@ -20,6 +21,7 @@ import Data.Aeson
        )
 import Data.ByteString (ByteString)
 import Data.CaseInsensitive (CI)
+import Data.HashMap.Strict qualified as HM
 import Data.Map (Map)
 import Data.Text (Text, pack, unpack)
 import Data.Typeable (Typeable)
@@ -27,6 +29,7 @@ import Data.Vector (Vector)
 import Data.Vector qualified as V
 import Data.Yaml qualified
 import Keter.Yaml.FilePath
+import Network.Wai (Middleware)
 import System.Exit (ExitCode)
 import System.FilePath (takeBaseName)
 
@@ -118,3 +121,16 @@ instance FromJSON SSLConfig where
                             return $ SSL cert chainCerts key
                         _ -> return SSLFalse -- fail "Must provide both certificate and key files"
                     ) v
+
+--------------------------------------------------------------------------------
+-- Per-app compiled middleware cache (moved here to avoid module cycles)
+--------------------------------------------------------------------------------
+
+-- | Cache key: (Host header bytes, JSON-encoded middleware list bytes)
+type MWCacheKey = (ByteString, ByteString)
+
+-- | TVar-backed cache of compiled WAI middlewares.
+-- Lifetime is scoped to an app instance; a fresh cache is created on each boot/reload.
+newtype MiddlewareCache = MiddlewareCache
+  { mcVar :: TVar (HM.HashMap MWCacheKey Middleware)
+  }

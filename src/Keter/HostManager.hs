@@ -40,8 +40,9 @@ import Keter.LabelMap qualified as LabelMap
 import Network.TLS qualified as TLS
 import Prelude hiding (log)
 
-data HostValue = HVActive   !AppId !ProxyAction !TLS.Credentials
-               | HVReserved !AppId
+data HostValue
+    = HVActive   !AppId !ProxyAction !TLS.Credentials !MiddlewareCache
+    | HVReserved !AppId
 
 newtype HostManager = HostManager (IORef (LabelMap HostValue))
 
@@ -89,7 +90,7 @@ reserveHosts aid hosts = do
             Nothing -> Right $ Set.singleton host
             Just (HVReserved aid') -> assert (aid /= aid')
                                     $ Left (host, aid')
-            Just (HVActive aid' _ _)
+            Just (HVActive aid' _ _ _)
                 | aid == aid' -> Right Set.empty
                 | otherwise   -> Left (host, aid'))
         else Right $ Set.singleton host
@@ -125,9 +126,10 @@ forgetReservations app hosts = do
                 Just (HVReserved app') -> app == app'
                 Just HVActive{} -> False
 
--- | Activate a new app. Note that you /must/ first reserve the hostnames you'll be using.
+-- | Activate a new app. You must have reserved hostnames first.
+-- Each host entry carries the per-app MiddlewareCache.
 activateApp :: AppId
-            -> Map.Map Host (ProxyAction, TLS.Credentials)
+            -> Map.Map Host (ProxyAction, TLS.Credentials, MiddlewareCache)
             -> KeterM HostManager ()
 activateApp app actions = do
     (HostManager mstate) <- ask
@@ -140,19 +142,23 @@ activateApp app actions = do
     liftIO $ atomicModifyIORef mstate $ \state0 ->
         (activateHelper app state0 actions, ())
 
-activateHelper :: AppId -> LabelMap HostValue -> Map Host (ProxyAction, TLS.Credentials) -> LabelMap HostValue
+activateHelper
+  :: AppId
+  -> LabelMap HostValue
+  -> Map Host (ProxyAction, TLS.Credentials, MiddlewareCache)
+  -> LabelMap HostValue
 activateHelper app =
     Map.foldrWithKey activate
   where
-    activate host (action, cr) state =
-        assert isOwnedByMe $ LabelMap.insert hostBS (HVActive app action cr) state
+    activate host (action, cr, cache) state =
+        assert isOwnedByMe $ LabelMap.insert hostBS (HVActive app action cr cache) state
       where
         hostBS = encodeUtf8 $ CI.original host
         isOwnedByMe = LabelMap.labelAssigned hostBS state &&
             case LabelMap.lookup hostBS state of
                 Nothing -> False
                 Just (HVReserved app') -> app == app'
-                Just (HVActive app' _ _) -> app == app'
+                Just (HVActive app' _ _ _) -> app == app'
 
 deactivateApp :: AppId
               -> Set Host
@@ -174,11 +180,11 @@ deactivateHelper app =
         isOwnedByMe = LabelMap.labelAssigned hostBS state &&
             case LabelMap.lookup hostBS state of
                 Nothing -> False
-                Just (HVActive app' _ _) -> app == app'
+                Just (HVActive app' _ _ _) -> app == app'
                 Just HVReserved {} -> False
 
 reactivateApp :: AppId
-              -> Map Host (ProxyAction, TLS.Credentials)
+              -> Map Host (ProxyAction, TLS.Credentials, MiddlewareCache)
               -> Set Host
               -> KeterM HostManager ()
 reactivateApp app actions hosts = do
@@ -197,10 +203,10 @@ reactivateApp app actions hosts = do
 
 lookupAction :: HostManager
              -> HostBS
-             -> IO (Maybe (ProxyAction, TLS.Credentials))
+             -> IO (Maybe (ProxyAction, TLS.Credentials, MiddlewareCache))
 lookupAction (HostManager mstate) host = do
     state <- readIORef mstate
     return $ case LabelMap.lookup (CI.original host) state of
         Nothing -> Nothing
-        Just (HVActive _ action cert) -> Just (action, cert)
+        Just (HVActive _ action cert cache) -> Just (action, cert, cache)
         Just (HVReserved _) -> Nothing

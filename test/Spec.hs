@@ -100,7 +100,7 @@ headThenPostNoCrash = do
     settings manager = do
       middlewareCache <- MiddlewareCache <$> newTVarIO HM.empty
       pure $ MkProxySettings {
-          psHostLookup     = const $ pure $ Just ((PAPort 6781 [] Nothing, False), error "unused tls certificate")
+          psHostLookup     = const $ pure $ Just ((PAPort 6781 [] Nothing, False), error "unused tls certificate", middlewareCache)
         , psManager        = manager
         , psUnknownHost    = const ""
         , psMissingHost    = ""
@@ -108,5 +108,4 @@ headThenPostNoCrash = do
         , psIpFromHeader   = False
         , psConnectionTimeBound = 5 * 60 * 1000
         , psHealthcheckPath = Nothing
-        , psMiddlewareCache = middlewareCache
         }
