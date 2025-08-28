@@ -6,7 +6,7 @@
 module Keter.Common where
 
 import Control.Exception (Exception)
-import Control.Concurrent.STM (TVar)
+import Control.Concurrent.STM (TVar, atomically, modifyTVar', readTVar, writeTVar, newTVarIO)
 import Data.Aeson
        ( FromJSON
        , Object
@@ -22,7 +22,9 @@ import Data.Aeson
 import Data.ByteString (ByteString)
 import Data.CaseInsensitive (CI)
 import Data.HashMap.Strict qualified as HM
+import Data.List (minimumBy)
 import Data.Map (Map)
+import Data.Ord (comparing)
 import Data.Text (Text, pack, unpack)
 import Data.Typeable (Typeable)
 import Data.Vector (Vector)
@@ -131,6 +133,44 @@ type MWCacheKey = (ByteString, ByteString)
 
 -- | TVar-backed cache of compiled WAI middlewares.
 -- Lifetime is scoped to an app instance; a fresh cache is created on each boot/reload.
+--
+-- Operational note:
+-- - This cache does not track TTL timestamps by design (compilation result is stable).
+-- - If administrators frequently change host names or middleware lists, the key space
+--   can grow until the app instance is reloaded. External users cannot trigger this
+--   growth; only trusted operators can by changing configuration. To provide a small
+--   safety net without refactoring, we cap growth with a simple bounded insert. See
+--   'mcInsertBounded' and its use in the proxy layer.
 newtype MiddlewareCache = MiddlewareCache
   { mcVar :: TVar (HM.HashMap MWCacheKey Middleware)
   }
+
+-- | Insert or update an entry with a simple hard cap on total entries.
+-- If size exceeds 'maxEntries', evict one arbitrary key.
+-- This is a minimal insurance to avoid unbounded growth in case of
+-- unusually frequent configuration churn by administrators.
+mcInsertBounded :: Int -> MiddlewareCache -> MWCacheKey -> Middleware -> IO ()
+mcInsertBounded maxEntries (MiddlewareCache tv) k v = atomically $ do
+  hm <- readTVar tv
+  let hm1 = HM.insert k v hm
+  writeTVar tv $ if HM.size hm1 <= maxEntries
+                   then hm1
+                   else evictOne hm1
+  where
+    -- Simple eviction: remove a deterministic, arbitrary key. This is NOT LRU.
+    -- Adequate as a guard rail; more advanced caching may switch to LRU/TTL.
+    evictOne :: HM.HashMap MWCacheKey Middleware -> HM.HashMap MWCacheKey Middleware
+    evictOne hm =
+      case HM.keys hm of
+        [] -> hm
+        ks -> HM.delete (minimumBy comparingKey ks) hm
+    comparingKey = comparing (\(h, m) -> (h, m))
+
+-- | Best-effort periodic purge hook (no-op since we don’t track TTL per entry).
+-- Kept for potential future extension (e.g., add timestamps to entries and purge by age).
+mcPurge :: MiddlewareCache -> IO ()
+mcPurge _ = pure ()
+
+-- | Construct a fresh per-app cache.
+newMiddlewareCache :: IO MiddlewareCache
+newMiddlewareCache = MiddlewareCache <$> newTVarIO HM.empty

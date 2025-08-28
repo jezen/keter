@@ -151,7 +151,9 @@ withActions appCache bconfig f =
               stanzas
               (wac { waconfigPort = port } : wacs)
               backs
-              (Map.unions $ actions : map (\host -> Map.singleton host ((PAPort port (waconfigMiddleware wac) (waconfigTimeout wac), rs), cert, appCache)) hosts))
+              (Map.unions $ actions :
+                   map (\host -> Map.singleton host ((PAPort port (waconfigMiddleware wac) (waconfigTimeout wac), rs), cert, appCache))
+                       hosts))
       where
         hosts = Set.toList $ Set.insert (waconfigApprootHost wac) (waconfigHosts wac)
 
@@ -237,7 +239,7 @@ start aid input tstate =
     withConfig aid input $ \newdir bconfig mmodtime ->
     withSanityChecks bconfig $ do
       -- Create a fresh per-app-instance middleware cache
-      appCache <- liftIO $ MiddlewareCache <$> newTVarIO HM.empty
+      appCache <- liftIO $ newMiddlewareCache
       withReservations aid appCache bconfig $ \webapps backs actions ->
         withBackgroundApps aid bconfig newdir appLogger backs $ \runningBacks ->
         withWebApps aid bconfig newdir appLogger webapps $ \runningWebapps -> do
@@ -593,9 +595,7 @@ reload input tstate = do
       withLogger appId (Just appLog) $ \_ appLogger ->
       withConfig appId input $ \newdir bconfig mmodtime ->
       withSanityChecks bconfig $ do
-        -- Fresh per-app-instance cache for the new version
-        appCache <- liftIO $ MiddlewareCache <$> newTVarIO HM.empty
-        -- Start the do-block inside the first continuation to avoid bracket issues
+        appCache <- liftIO $ newMiddlewareCache
         withReservations appId appCache bconfig $ \webapps backs actions -> do
           withBackgroundApps appId bconfig newdir appLogger backs $ \runningBacks ->
             withWebApps appId bconfig newdir appLogger webapps $ \runningWebapps -> do
@@ -653,7 +653,10 @@ terminateHelper :: AppId
                 -> Maybe Logger
                 -> KeterM AppStartConfig ()
 terminateHelper aid apps backs mdir _appLogger = do
-    liftIO $ threadDelay $ 20 * 1000 * 1000
+    AppStartConfig{..} <- ask
+    -- honour graceful-drain knob if provided; default to 20s for backwards compatibility
+    let preDelay = maybe (20 * 1000 * 1000) id (kconfigGracefulDrainMicros ascKeterConfig)
+    liftIO $ threadDelay preDelay
     $logInfo $ pack $
         "Sending old process TERM signal: "
           ++ case aid of { AINamed t -> unpack t; AIBuiltin -> "builtin" }

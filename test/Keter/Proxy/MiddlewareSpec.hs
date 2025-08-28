@@ -15,7 +15,6 @@ import Data.Aeson (eitherDecode)
 import Data.ByteString (ByteString)
 import qualified Data.ByteString.Lazy.Char8 as LBS
 import qualified Data.HashMap.Strict as HM
-import Keter.Common (MiddlewareCache(..))  -- per-app cache type moved to Common
 import Keter.Config.Middleware (MiddlewareConfig)
 import Keter.Config.V10
 import Keter.Context
@@ -65,6 +64,7 @@ mkSettings manager hostLookup useHeader mHealth exBody = do
   pure $ MkProxySettings
     { psHostLookup     = hostLookup
     , psManager        = manager
+    , psTrustForwardedFor = \_ -> True
     , psUnknownHost    = const ""
     , psMissingHost    = ""
     , psProxyException = exBody

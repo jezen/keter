@@ -129,6 +129,9 @@ data KeterConfig = KeterConfig
 
     , kconfigRotateLogs           :: !Bool
     , kconfigHealthcheckPath      :: !(Maybe Text)
+
+    -- New: optional graceful drain delay (microseconds) before TERM during reload
+    , kconfigGracefulDrainMicros  :: !(Maybe Int)
     }
 
 instance ToCurrent KeterConfig where
@@ -150,6 +153,7 @@ instance ToCurrent KeterConfig where
         , kconfigProxyException = Nothing
         , kconfigRotateLogs = True
         , kconfigHealthcheckPath = Nothing
+        , kconfigGracefulDrainMicros = Nothing
         }
       where
         getSSL Nothing = V.empty
@@ -179,6 +183,7 @@ defaultKeterConfig = KeterConfig
         , kconfigProxyException = Nothing
         , kconfigRotateLogs = True
         , kconfigHealthcheckPath = Nothing
+        , kconfigGracefulDrainMicros = Nothing
         }
 
 instance ParseYamlFile KeterConfig where
@@ -205,6 +210,7 @@ instance ParseYamlFile KeterConfig where
             <*> o .:? "proxy-exception-response-file"
             <*> o .:? "rotate-logs" .!= True
             <*> o .:? "app-crash-hook"
+            <*> o .:? "graceful-drain-micros"
 
 -- | Whether we should force redirect to HTTPS routes.
 type RequiresSecure = Bool
