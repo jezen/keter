@@ -4,12 +4,12 @@
 {-# LANGUAGE TupleSections #-}
 
 -- | A light-weight, minimalistic reverse HTTP proxy.
+-- Updated: apply precompiled middlewares; remove MiddlewareCache.
 module Keter.Proxy
     ( reverseProxy
     , makeSettings
     , ProxySettings(..)
     , TLSConfig (..)
-    , MiddlewareCache(..)
     ) where
 
 import Blaze.ByteString.Builder (copyByteString, toByteString)
@@ -20,14 +20,11 @@ import Control.Monad.IO.Class (liftIO)
 import Control.Monad.IO.Unlift (withRunInIO)
 import Control.Monad.Logger
 import Control.Monad.Reader (ask)
-import Control.Concurrent.STM (atomically, readTVar)
-import Data.Aeson qualified as Aeson
 import Data.ByteString (ByteString)
 import Data.ByteString qualified as S
 import Data.ByteString.Char8 qualified as S8
 import Data.CaseInsensitive qualified as CI
 import Data.Functor ((<&>))
-import Data.HashMap.Strict qualified as HM
 import Data.Text as T (Text, pack, unwords)
 import Data.Text.Encoding (decodeUtf8With, encodeUtf8)
 import Data.Text.Encoding.Error (lenientDecode)
@@ -36,7 +33,6 @@ import Data.Version (showVersion)
 import GHC.Exts (fromString)
 import Keter.Common
 import Keter.Config
-import Keter.Config.Middleware (MiddlewareConfig, processMiddlewareIO)
 import Keter.Context
 import Keter.HostManager qualified as HostMan
 import Keter.Rewrite qualified as Rewrite
@@ -78,38 +74,10 @@ import Prelude hiding (FilePath, (++))
 import System.Directory qualified as Dir
 import System.FilePath (FilePath)
 import WaiAppStatic.Listing (defaultListing)
-import qualified Data.ByteString.Lazy as LBS
-
--- | Hard cap for middleware compilation cache entries per app instance.
--- This is a small insurance against unbounded growth in the presence of
--- unusually frequent configuration churn by administrators. It is NOT LRU.
--- External traffic cannot inflate this cache; only configuration changes can.
--- Adjust if you have many per-host/per-config variants.
---
--- If you later want to make this configurable, thread a knob from KeterConfig.
-mwcacheMaxEntries :: Int
-mwcacheMaxEntries = 4096
-
--- | Look up or build the middleware chain for a given vhost and config list.
-getOrBuildMiddleware :: MiddlewareCache -> ByteString -> [MiddlewareConfig] -> IO Wai.Middleware
-getOrBuildMiddleware cache@(MiddlewareCache tv) host cfgs = do
-  let key :: MWCacheKey
-      key = (host, LBS.toStrict (Aeson.encode cfgs))
-  mCached <- atomically $ HM.lookup key <$> readTVar tv
-  case mCached of
-    Just mw -> pure mw
-    Nothing -> do
-      mw <- processMiddlewareIO cfgs
-      -- Minimal insurance: bounded insert with an arbitrary eviction strategy.
-      -- See Keter.Common.mcInsertBounded for details.
-      mcInsertBounded mwcacheMaxEntries cache key mw
-      pure mw
-
---------------------------------------------------------------------------------
 
 data ProxySettings = MkProxySettings
-  { -- | Mapping from virtual hostname to action, credentials and per-app cache.
-    psHostLookup          :: ByteString -> IO (Maybe (ProxyAction, TLS.Credentials, MiddlewareCache))
+  { -- | Mapping from virtual hostname to action, credentials
+    psHostLookup          :: ByteString -> IO (Maybe (ProxyAction, TLS.Credentials))
   , psManager             :: !Manager
   , psIpFromHeader        :: Bool
   , psTrustForwardedFor   :: Wai.Request -> Bool
@@ -132,7 +100,6 @@ makeSettings hostman = do
     let psConnectionTimeBound = kconfigConnectionTimeBound * 1000
     let psIpFromHeader = kconfigIpFromHeader
     let psHealthcheckPath = encodeUtf8 <$> kconfigHealthcheckPath
-    -- Default trust predicate; tests run locally. Harden if needed.
     let psTrustForwardedFor _req = True
     pure $ MkProxySettings{..}
     where
@@ -168,28 +135,23 @@ reverseProxy listener = do
   where
     warp host port = Warp.setHost host $ Warp.setPort port Warp.defaultSettings
 
-connectClientCertificates
-  :: (ByteString -> IO (Maybe (ProxyAction, TLS.Credentials, MiddlewareCache)))
-  -> Bool
-  -> WarpTLS.TLSSettings
-  -> WarpTLS.TLSSettings
+connectClientCertificates :: (ByteString -> IO (Maybe (ProxyAction, TLS.Credentials))) -> Bool -> WarpTLS.TLSSettings -> WarpTLS.TLSSettings
 connectClientCertificates hl session s =
   let
     newHooks = WarpTLS.tlsServerHooks s
-    -- TLS.onServerNameIndication :: Maybe TLS.HostName -> IO TLS.Credentials
-    -- todo: add nested lookup
     newOnSNI :: Maybe TLS.HostName -> IO TLS.Credentials
     newOnSNI (Just n) = do
       -- Return per-host certificate if available
       mx <- hl (S8.pack n)
       case mx of
-        Just (_, creds, _) -> pure creds
-        Nothing            -> pure mempty   -- no match: use empty creds
-    newOnSNI Nothing = pure mempty
+        Just ((_, _), creds) -> pure creds
+        Nothing              -> pure mempty
+    newOnSNI Nothing = pure mempty -- we could return default certificate here
   in
     s { WarpTLS.tlsServerHooks = newHooks { TLS.onServerNameIndication = newOnSNI }
       , WarpTLS.tlsSessionManagerConfig = if session then Just TLSSession.defaultConfig else Nothing
       }
+
 
 withClient :: Bool -- ^ Is the outer listener secure (HTTPS)?
            -> KeterM ProxySettings Wai.Application
@@ -200,7 +162,7 @@ withClient isSecure = do
         pure $ waiProxyToSettings
            (error "First argument to waiProxyToSettings forced, even thought wpsGetDest provided")
            defaultWaiProxySettings
-            { wpsSetIpHeader = if False then SIHFromHeader else SIHFromSocket
+            { wpsSetIpHeader = SIHFromSocket  -- Default, will be overridden per-request in getDest
             , wpsGetDest = Just (getDest cfg honourHeader)
             , wpsOnExc =
                  handleProxyException (\app e -> rio $ logException app e) psProxyException
@@ -211,9 +173,11 @@ withClient isSecure = do
       "Got a proxy exception on request " <> show a <> " with exception "  <> show b
 
     getDest :: ProxySettings -> (Wai.Request -> Bool) -> Wai.Request -> IO (LocalWaiProxySettings, WaiProxyResponse)
+    -- respond to healthckecks, regardless of Host header value and presence
     getDest MkProxySettings{..} _ req
       | psHealthcheckPath == Just (Wai.rawPathInfo req)
       = return (defaultLocalWaiProxySettings, WPRResponse healthcheckResponse)
+    -- inspect Host header to determine which App to proxy to
     getDest cfg@MkProxySettings{..} useHeaderPred req =
         case Wai.requestHeaderHost req of
             Nothing -> do
@@ -222,6 +186,8 @@ withClient isSecure = do
 
     processHost :: ProxySettings -> (Wai.Request -> Bool) -> Wai.Request -> S.ByteString -> IO (LocalWaiProxySettings, WaiProxyResponse)
     processHost cfg@MkProxySettings{..} useHeaderPred req host = do
+        -- Perform two levels of lookup. First: look up the entire host. If
+        -- that fails, try stripping off any port number and try again.
         mEntry <- liftIO $ do
           let tryHost h = psHostLookup h
           m1 <- tryHost host
@@ -233,9 +199,9 @@ withClient isSecure = do
         case mEntry of
           Nothing -> do -- we don't know the host that was asked for
             return (defaultLocalWaiProxySettings, WPRResponse $ unknownHostResponse host (psUnknownHost host))
-          Just ((action, requiresSecure), _cert, cache)
+          Just ((action, requiresSecure), _cert)
             | requiresSecure && not isSecure -> performHttpsRedirect cfg host req
-            | otherwise -> performAction psManager psProxyException isSecure useHeaderPred psConnectionTimeBound cache host req action
+            | otherwise -> performAction psManager psProxyException isSecure useHeaderPred psConnectionTimeBound host req action
 
     performHttpsRedirect MkProxySettings{..} host =
         return . (addjustGlobalBound psConnectionTimeBound Nothing,) . WPRResponse . redirectApp config
@@ -263,19 +229,18 @@ addjustGlobalBound bound to = go `setLpsTimeBound` defaultLocalWaiProxySettings
            Just x | x > 0 -> Just x
            _              -> Nothing
 
--- | Perform a stanza action, applying per-app middlewares via the app's cache.
+-- | Perform a stanza action, applying precompiled middlewares.
 performAction :: Manager
               -> ByteString               -- ^ onExceptBody
               -> Bool                     -- ^ isSecure
               -> (Wai.Request -> Bool)    -- ^ should honour XFF?
               -> Int                      -- ^ global bound (us)
-              -> MiddlewareCache          -- ^ per-app cache
-              -> ByteString               -- ^ host (cache key)
+              -> ByteString               -- ^ host (unused now; kept for parity)
               -> Wai.Request
               -> ProxyActionRaw
               -> IO (LocalWaiProxySettings, WaiProxyResponse)
-performAction psManager onExceptBody isSecure useHeaderPred globalBound cache host req = \case
-  (PAPort port mids tbound) -> do
+performAction psManager onExceptBody isSecure useHeaderPred globalBound _host req = \case
+  (PAPort port mw tbound) -> do
     let innerApp :: Wai.Application
         innerApp =
           waiProxyToSettings
@@ -292,19 +257,17 @@ performAction psManager onExceptBody isSecure useHeaderPred globalBound cache ho
               , wpsOnExc =
                   handleProxyException (\_ _ -> pure ()) onExceptBody
               } psManager
-    mw <- getOrBuildMiddleware cache host mids
     pure ( addjustGlobalBound globalBound tbound
          , WPRApplication (mw innerApp)
          )
 
-  (PAStatic StaticFilesConfig {..}) -> do
+  (PAStatic StaticFilesConfig {..} mw) -> do
     let baseApp = staticApp (defaultFileServerSettings sfconfigRoot)
           { ssListing =
               if sfconfigListings
                   then Just defaultListing
                   else Nothing
           }
-    mw <- getOrBuildMiddleware cache host sfconfigMiddleware
     return ( addjustGlobalBound globalBound sfconfigTimeout
            , WPRApplication (mw baseApp)
            )
@@ -312,9 +275,8 @@ performAction psManager onExceptBody isSecure useHeaderPred globalBound cache ho
   (PARedirect config) ->
     return (addjustGlobalBound globalBound Nothing, WPRResponse $ redirectApp config req)
 
-  (PAReverseProxy config rpconfigMiddleware tbound) -> do
+  (PAReverseProxy config mw tbound) -> do
        let baseApp = Rewrite.simpleReverseProxy psManager config
-       mw <- getOrBuildMiddleware cache host rpconfigMiddleware
        return ( addjustGlobalBound globalBound tbound
               , WPRApplication (mw baseApp)
               )
@@ -395,10 +357,11 @@ unknownHostResponse :: ByteString -> ByteString -> Wai.Response
 unknownHostResponse host body = Wai.responseBuilder
     status404
     [("Content-Type", "text/html; charset=utf-8"),
-     ("X-Forwarded-Host", 
+     ("X-Forwarded-Host",
       -- if an attacker manages to insert line breaks somehow,
       -- this is also vulnerable.
-      escapeHtml host)]
+      escapeHtml host
+     )]
     (copyByteString body)
 
 escapeHtml :: ByteString -> ByteString

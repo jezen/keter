@@ -8,10 +8,7 @@
 {-# LANGUAGE TypeFamilies #-}
 
 -- | Application lifecycle for a Keter bundle.
--- This module wires config stanzas into runtime actions. Key note:
---   - For WebApp stanzas we now carry a middleware list into PAPort
---     (see V10.ProxyActionRaw), so the proxy layer can apply edge middlewares
---     to the whole app without modifying the app code.
+-- Updated: compile middlewares at activation and remove MiddlewareCache usage.
 module Keter.App
     ( start
     , reload
@@ -30,7 +27,6 @@ import Control.Monad.IO.Unlift (withRunInIO)
 import Control.Monad.Logger
 import Control.Monad.Reader (ask)
 import Data.CaseInsensitive qualified as CI
-import Data.HashMap.Strict qualified as HM
 import Data.Foldable (for_)
 import Data.IORef
 import Data.Map (Map)
@@ -72,6 +68,9 @@ import System.Posix.Files (fileAccess)
 import System.Posix.Types (EpochTime)
 import System.Timeout (timeout)
 
+import Keter.Config.Middleware (processMiddlewareIO, MiddlewareConfig)
+import Network.Wai (Middleware)
+
 unpackBundle :: FilePath
              -> AppId
              -> KeterM AppStartConfig (FilePath, BundleConfig)
@@ -81,12 +80,9 @@ unpackBundle bundle aid = do
     liftIO $ unpackTempTar (fmap snd ascSetuid) ascTempFolder bundle folderName $ \dir -> do
         -- Get the FilePath for the keter yaml configuration. Tests for
         -- keter.yml and defaults to keter.yaml.
-        configFP <- do
-            let yml = dir </> "config" </> "keter.yml"
-            exists <- doesFileExist yml
-            return $ if exists then yml
-                               else dir </> "config" </> "keter.yaml"
-
+        let yml = dir </> "config" </> "keter.yml"
+        exists <- doesFileExist yml
+        let configFP = if exists then yml else dir </> "config" </> "keter.yaml"
         mconfig <- decodeFileRelative configFP
         config <-
             case mconfig of
@@ -110,80 +106,85 @@ withConfig aid (AIBundle fp modtime) f = do
             rio $ f (Just newdir) bconfig (Just modtime)
 
 withReservations :: AppId
-                 -> MiddlewareCache
                  -> BundleConfig
-                 -> ([WebAppConfig Port] -> [BackgroundConfig] -> Map Host (ProxyAction, TLS.Credentials, MiddlewareCache) -> KeterM AppStartConfig a)
+                 -> ([WebAppConfig Port] -> [BackgroundConfig] -> Map Host (ProxyAction, TLS.Credentials) -> KeterM AppStartConfig a)
                  -> KeterM AppStartConfig a
-withReservations aid appCache bconfig f = do
+withReservations aid bconfig f = do
     AppStartConfig{..} <- ask
-    withActions appCache bconfig $ \wacs backs actions ->
+    withActions bconfig $ \wacs backs actions ->
         withRunInIO $ \rio ->
             bracketOnError
               (rio $ withMappedConfig (const ascHostManager) $ reserveHosts aid $ Map.keysSet actions)
               (rio . withMappedConfig (const ascHostManager) . forgetReservations aid)
               (\_ -> rio $ f wacs backs actions)
 
-withActions :: MiddlewareCache
-            -> BundleConfig
-            -> ([ WebAppConfig Port] -> [BackgroundConfig] -> Map Host (ProxyAction, TLS.Credentials, MiddlewareCache) -> KeterM AppStartConfig a)
+withActions :: BundleConfig
+            -> ([ WebAppConfig Port] -> [BackgroundConfig] -> Map Host (ProxyAction, TLS.Credentials) -> KeterM AppStartConfig a)
             -> KeterM AppStartConfig a
-withActions appCache bconfig f =
+withActions bconfig f =
     loop (V.toList $ bconfigStanzas bconfig) [] [] Map.empty
   where
     -- Load TLS credentials for a stanza if applicable (SNI).
-    -- TODO: add loading from a relative location if needed.
+    -- todo: add loading from relative location
     loadCert (SSL certFile chainCertFiles keyFile) =
          either (const mempty) (TLS.Credentials . (:[]))
             <$> TLS.credentialLoadX509Chain certFile (V.toList chainCertFiles) keyFile
     loadCert _ = return mempty
 
-    loop [] wacs backs actions = f wacs backs actions
+    compileMW :: [Keter.Config.Middleware.MiddlewareConfig] -> IO Middleware
+    compileMW = processMiddlewareIO
 
+    loop [] wacs backs actions = f wacs backs actions
     loop (Stanza (StanzaWebApp wac) rs:stanzas) wacs backs actions = do
       AppStartConfig{..} <- ask
       withRunInIO $ \rio ->
         liftIO $ bracketOnError
-          (rio (getPort ascPortPool) >>= either throwIO
-               (\p -> fmap (p,) <$> loadCert $ waconfigSsl wac)
+          (rio (getPort ascPortPool) >>= either throwIO pure)
+          (\port -> releasePort ascPortPool port)
+          (\port -> do
+              mw <- compileMW (waconfigMiddleware wac)
+              let wac' = wac { waconfigPort = port }
+                  action = PAPort port mw (waconfigTimeout wac)
+                  hosts = Set.toList $ Set.insert (waconfigApprootHost wac) (waconfigHosts wac)
+              cert <- loadCert (waconfigSsl wac)
+              rio $ loop
+                stanzas
+                (wac' : wacs)
+                backs
+                (Map.unions $ actions : map (\host -> Map.singleton host ((action, rs), cert)) hosts)
           )
-          (\(port, _)    -> releasePort ascPortPool port)
-          (\(port, cert) -> rio $ loop
-              stanzas
-              (wac { waconfigPort = port } : wacs)
-              backs
-              (Map.unions $ actions :
-                   map (\host -> Map.singleton host ((PAPort port (waconfigMiddleware wac) (waconfigTimeout wac), rs), cert, appCache))
-                       hosts))
-      where
-        hosts = Set.toList $ Set.insert (waconfigApprootHost wac) (waconfigHosts wac)
 
     loop (Stanza (StanzaStaticFiles sfc) rs:stanzas) wacs backs actions0 = do
         cert <- liftIO $ loadCert $ sfconfigSsl sfc
-        loop stanzas wacs backs (actions cert)
+        mw <- liftIO $ compileMW (sfconfigMiddleware sfc)
+        let action = PAStatic sfc mw
+        loop stanzas wacs backs (actions action cert)
       where
-        actions cert = Map.unions
-                $ actions0
-                : map (\host -> Map.singleton host ((PAStatic sfc, rs), cert, appCache))
-                  (Set.toList (sfconfigHosts sfc))
+        actions action cert =
+          Map.unions $ actions0 :
+            map (\host -> Map.singleton host ((action, rs), cert))
+                (Set.toList (sfconfigHosts sfc))
 
     loop (Stanza (StanzaRedirect red) rs:stanzas) wacs backs actions0 = do
         cert <- liftIO $ loadCert $ redirconfigSsl red
-        loop stanzas wacs backs (actions cert)
+        let action = PARedirect red
+        loop stanzas wacs backs (actions action cert)
       where
-        actions cert = Map.unions
-                $ actions0
-                : map (\host -> Map.singleton host ((PARedirect red, rs), cert, appCache))
-                  (Set.toList (redirconfigHosts red))
+        actions action cert =
+          Map.unions $ actions0 :
+            map (\host -> Map.singleton host ((action, rs), cert))
+                (Set.toList (redirconfigHosts red))
 
     loop (Stanza (StanzaReverseProxy rev mid to) rs:stanzas) wacs backs actions0 = do
         cert <- liftIO $ loadCert $ reversingUseSSL rev
-        loop stanzas wacs backs (actions cert)
-      where
-        actions cert = Map.insert (CI.mk $ reversingHost rev) ((PAReverseProxy rev mid to, rs), cert, appCache) actions0
+        mw <- liftIO $ compileMW mid
+        let action = PAReverseProxy rev mw to
+        loop stanzas wacs backs (Map.insert (CI.mk $ reversingHost rev) ((action, rs), cert) actions0)
 
     loop (Stanza (StanzaBackground back) _:stanzas) wacs backs actions =
         loop stanzas wacs (back:backs) actions
 
+-- | Gives the log file or log tag name for a given 'AppId'
 appLogName :: AppId -> String
 appLogName AIBuiltin = "__builtin__"
 appLogName (AINamed x) = "app-" <> unpack x
@@ -238,9 +239,7 @@ start aid input tstate =
     withLogger aid Nothing $ \tAppLogger appLogger ->
     withConfig aid input $ \newdir bconfig mmodtime ->
     withSanityChecks bconfig $ do
-      -- Create a fresh per-app-instance middleware cache
-      appCache <- liftIO $ newMiddlewareCache
-      withReservations aid appCache bconfig $ \webapps backs actions ->
+      withReservations aid bconfig $ \webapps backs actions ->
         withBackgroundApps aid bconfig newdir appLogger backs $ \runningBacks ->
         withWebApps aid bconfig newdir appLogger webapps $ \runningWebapps -> do
             asc@AppStartConfig{..} <- ask
@@ -595,8 +594,7 @@ reload input tstate = do
       withLogger appId (Just appLog) $ \_ appLogger ->
       withConfig appId input $ \newdir bconfig mmodtime ->
       withSanityChecks bconfig $ do
-        appCache <- liftIO $ newMiddlewareCache
-        withReservations appId appCache bconfig $ \webapps backs actions -> do
+        withReservations appId bconfig $ \webapps backs actions -> do
           withBackgroundApps appId bconfig newdir appLogger backs $ \runningBacks ->
             withWebApps appId bconfig newdir appLogger webapps $ \runningWebapps -> do
               liftIO $ mapM_ (ensureAlive tstate) runningWebapps
@@ -654,7 +652,6 @@ terminateHelper :: AppId
                 -> KeterM AppStartConfig ()
 terminateHelper aid apps backs mdir _appLogger = do
     AppStartConfig{..} <- ask
-    -- honour graceful-drain knob if provided; default to 20s for backwards compatibility
     let preDelay = maybe (20 * 1000 * 1000) id (kconfigGracefulDrainMicros ascKeterConfig)
     liftIO $ threadDelay preDelay
     $logInfo $ pack $

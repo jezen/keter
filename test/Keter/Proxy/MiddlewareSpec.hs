@@ -5,7 +5,6 @@
 module Keter.Proxy.MiddlewareSpec (tests) where
 
 import Control.Concurrent (forkIO, threadDelay)
-import Control.Concurrent.STM (newTVarIO)
 import Control.Exception (try)
 import Control.Lens ((&), (.~), (^.))
 import Control.Monad (void)
@@ -14,8 +13,7 @@ import Control.Monad.Reader
 import Data.Aeson (eitherDecode)
 import Data.ByteString (ByteString)
 import qualified Data.ByteString.Lazy.Char8 as LBS
-import qualified Data.HashMap.Strict as HM
-import Keter.Config.Middleware (MiddlewareConfig)
+import Keter.Config.Middleware (MiddlewareConfig, processMiddlewareIO)
 import Keter.Config.V10
 import Keter.Context
 import Keter.Proxy
@@ -55,7 +53,7 @@ runProxyOn _ settings listenPort = void . forkIO $
 
 mkSettings
   :: Manager
-  -> (ByteString -> IO (Maybe (ProxyAction, TLS.Credentials, MiddlewareCache)))
+  -> (ByteString -> IO (Maybe (ProxyAction, TLS.Credentials)))  -- Updated signature
   -> Bool                   -- ip-from-header
   -> Maybe ByteString       -- healthcheck-path
   -> ByteString             -- proxy-exception body
@@ -101,17 +99,16 @@ caseRateLimitFixedWindow = do
       mids = decodeMids midsJSON
 
   _ <- forkIO $ startBackend backendPort
-
   manager <- HTTP.newManager HTTP.tlsManagerSettings
 
-  let host = "rl.test"
-  -- per-app cache simulating one running app instance
-  middlewareCache <- MiddlewareCache <$> newTVarIO HM.empty
+  -- Compile middleware at setup time (like App.hs does)
+  compiledMW <- processMiddlewareIO mids
 
-  let hostLookup :: ByteString -> IO (Maybe (ProxyAction, TLS.Credentials, MiddlewareCache))
+  let host = "rl.test"
+  let hostLookup :: ByteString -> IO (Maybe (ProxyAction, TLS.Credentials))
       hostLookup _ =
-        -- PAPort port mids (Maybe Int)
-        return $ Just ((PAPort backendPort mids Nothing, False), mempty, middlewareCache)
+        -- PAPort now contains compiled middleware
+        return $ Just ((PAPort backendPort compiledMW Nothing, False), mempty)
 
   settings <- mkSettings manager hostLookup False Nothing "proxy error"
   runProxyOn manager settings proxyPort
@@ -154,10 +151,11 @@ caseIpFromHeaderTrue = do
 
   _ <- forkIO $ startBackend backendPort
   manager <- HTTP.newManager HTTP.tlsManagerSettings
+  
+  compiledMW <- processMiddlewareIO mids
 
   let host = "xff.test"
-  middlewareCache <- MiddlewareCache <$> newTVarIO HM.empty
-  let hostLookup _ = return $ Just ((PAPort backendPort mids Nothing, False), mempty, middlewareCache)
+  let hostLookup _ = return $ Just ((PAPort backendPort compiledMW Nothing, False), mempty)
   settings <- mkSettings manager hostLookup True Nothing "proxy error"
   runProxyOn manager settings proxyPort
   threadDelay 200_000
@@ -190,10 +188,12 @@ caseHealthcheckBypass = do
       proxyPort   = 6794
   _ <- forkIO $ startBackend backendPort
   manager <- HTTP.newManager HTTP.tlsManagerSettings
+  
+  -- No middleware for this test - use id middleware
+  idMW <- processMiddlewareIO []
 
   let host = "hc.test"
-  middlewareCache <- MiddlewareCache <$> newTVarIO HM.empty
-  let hostLookup _ = return $ Just ((PAPort backendPort [] Nothing, False), mempty, middlewareCache)
+  let hostLookup _ = return $ Just ((PAPort backendPort idMW Nothing, False), mempty)
   settings <- mkSettings manager hostLookup False (Just "/keter-health") "proxy error"
 
   runProxyOn manager settings proxyPort
@@ -210,10 +210,12 @@ caseProxyExceptionBody = do
   let proxyPort = 6796
   manager <- HTTP.newManager HTTP.tlsManagerSettings
 
+  -- No middleware for this test
+  idMW <- processMiddlewareIO []
+
   let host = "down.test"
       exBody = "my branded proxy error"
-  middlewareCache <- MiddlewareCache <$> newTVarIO HM.empty
-  let hostLookup _ = return $ Just ((PAPort 59999 [] Nothing, False), mempty, middlewareCache) -- no backend here
+  let hostLookup _ = return $ Just ((PAPort 59999 idMW Nothing, False), mempty) -- no backend here
 
   settings <- mkSettings manager hostLookup False Nothing exBody
   runProxyOn manager settings proxyPort

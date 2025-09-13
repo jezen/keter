@@ -9,9 +9,9 @@
 --   - WebAppConfig.middleware :: [MiddlewareConfig]
 --     So webapp stanzas can declare edge middlewares (e.g., rate limiter)
 --     applied by Keter itself, without app code changes.
---   - ProxyActionRaw.PAPort carries the middleware list for webapps, so the
---     proxy layer can wrap a local reverse-proxy Application with those
---     middlewares and achieve whole-app coverage.
+--   - ProxyActionRaw now carries a compiled Wai.Middleware. 
+--     Middlewares are compiled at activation/reload time
+--     (in Keter.App) to avoid runtime caching and preserve isolation.
 module Keter.Config.V10 where
 
 import Control.Applicative ((<|>))
@@ -44,6 +44,7 @@ import Keter.Config.Middleware
 import Keter.Config.V04 qualified as V04
 import Keter.Rewrite (ReverseProxyConfig)
 import Keter.Yaml.FilePath
+import Network.Wai (Middleware)
 import Network.Wai.Handler.Warp qualified as Warp
 import System.FilePath qualified as F
 import System.Posix.Types (EpochTime)
@@ -222,6 +223,9 @@ data StanzaRaw port
     = StanzaStaticFiles !StaticFilesConfig
     | StanzaRedirect !RedirectConfig
     | StanzaWebApp !(WebAppConfig port)
+    -- StanzaReverseProxy keeps middleware configs here for parsing and
+    -- ToJSON. It is compiled later (in App.withActions) into a Middleware
+    -- stored inside ProxyActionRaw.PAReverseProxy.
     | StanzaReverseProxy !ReverseProxyConfig ![ MiddlewareConfig ] !(Maybe Int)
     | StanzaBackground !BackgroundConfig
             -- FIXME console app
@@ -232,17 +236,32 @@ data StanzaRaw port
 -- This datatype is very similar to Stanza, but is necessarily separate since:
 --
 -- 1. Webapps will be assigned ports.
+--
 -- 2. Not all stanzas have an associated proxy action.
 --
--- Note: PAPort now carries [MiddlewareConfig] so that Keter.Proxy can wrap a
--- local reverse-proxy Application to the assigned port with a stanza-local
--- middleware chain, achieving app-agnostic full coverage (e.g., rate limiting).
+-- Now carries compiled Wai.Middleware:
+--   PAPort: webapp local proxy wrapped with 'Middleware'
+--   PAStatic: StaticFilesConfig still holds middleware configs at parse time;
+--             we compile them in App and then apply in Proxy.
+--   PAReverseProxy: compiled middleware baked in.
 data ProxyActionRaw
-    = PAPort Port ![ MiddlewareConfig ] !(Maybe Int)
-    | PAStatic StaticFilesConfig
+    = PAPort Port !Middleware !(Maybe Int)
+    | PAStatic StaticFilesConfig !Middleware
     | PARedirect RedirectConfig
-    | PAReverseProxy ReverseProxyConfig ![ MiddlewareConfig ] !(Maybe Int)
-    deriving Show
+    | PAReverseProxy ReverseProxyConfig !Middleware !(Maybe Int)
+
+{-|
+The manual instance replaces the 'Middleware' values with "<middleware>" in the string representation since the actual middleware functions cannot be shown. This is a common pattern when dealing with function types that need to be part of data structures that require 'Show' instances.
+-}
+instance Show ProxyActionRaw where
+    show (PAPort port _ timeout) = 
+        "PAPort " ++ show port ++ " <middleware> " ++ show timeout
+    show (PAStatic config _) = 
+        "PAStatic " ++ show config ++ " <middleware>"
+    show (PARedirect config) = 
+        "PARedirect " ++ show config
+    show (PAReverseProxy config _ timeout) = 
+        "PAReverseProxy " ++ show config ++ " <middleware> " ++ show timeout
 
 type ProxyAction = (ProxyActionRaw, RequiresSecure)
 
@@ -404,11 +423,8 @@ instance ToJSON RedirectDest where
 
 type IsSecure = Bool
 
--- | WebAppConfig now contains a 'middleware' field. These middlewares are
--- compiled and applied by Keter.Proxy around a local reverse proxy that
--- forwards to the app's dynamically assigned port. This lets you enforce
--- edge concerns (like rate limiting) for the whole app without touching
--- the app code.
+-- | WebAppConfig retains the user's middleware declarations; compilation happens
+-- during activation in Keter.App.
 data WebAppConfig port = WebAppConfig
     { waconfigExec        :: !F.FilePath
     , waconfigArgs        :: !(Vector Text)

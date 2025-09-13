@@ -98,9 +98,9 @@ headThenPostNoCrash = do
 
     settings :: Manager -> IO ProxySettings  -- Now returns IO ProxySettings
     settings manager = do
-      middlewareCache <- MiddlewareCache <$> newTVarIO HM.empty
+      -- Remove MiddlewareCache usage - middlewares are now compiled at activation
       pure $ MkProxySettings {
-          psHostLookup     = const $ pure $ Just ((PAPort 6781 [] Nothing, False), error "unused tls certificate", middlewareCache)
+          psHostLookup     = const $ pure $ Just ((PAPort 6781 id Nothing, False), error "unused tls certificate")
         , psManager        = manager
         , psUnknownHost    = const ""
         , psMissingHost    = ""
