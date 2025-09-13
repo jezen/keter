@@ -4,14 +4,12 @@
 module Main where
 
 import Control.Concurrent (forkIO, threadDelay)
-import Control.Concurrent.STM (newTVarIO)
 import Control.Concurrent.STM.TQueue
 import Control.Monad
 import Control.Monad.Logger
 import Control.Monad.Reader
 import Control.Monad.STM
 import Data.ByteString (ByteString)
-import qualified Data.HashMap.Strict as HM
 import Data.Maybe (isJust)
 import Keter.Config.V10
 import Keter.Context
