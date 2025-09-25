@@ -241,7 +241,7 @@ launchWorker appid tstate tmnext mcurrentApp' action' =
 
     reloadMsg :: String -> String -> Text
     reloadMsg app input =
-        pack $ "Reloading from: " <> app <> input
+        pack $ "Reloading from: " <> app <> ", " <> input
 
     errorStartingBundleMsg :: String -> String -> Text
     errorStartingBundleMsg bundleName e =
@@ -250,7 +250,7 @@ launchWorker appid tstate tmnext mcurrentApp' action' =
     processAction :: Maybe App -> Action -> KeterM AppManager (Maybe App)
     processAction Nothing Terminate = return Nothing
     processAction (Just app) Terminate = do
-        $logInfo $ pack ("Terminating" <> show app)
+        $logInfo $ pack ("Terminating " <> show app)
         withMappedConfig (const app) App.terminate
         return Nothing
     processAction Nothing (Reload input) = do
