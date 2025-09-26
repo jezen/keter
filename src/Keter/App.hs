@@ -8,7 +8,6 @@
 {-# LANGUAGE TypeFamilies #-}
 
 -- | Application lifecycle for a Keter bundle.
--- Updated: compile middlewares at activation and remove MiddlewareCache usage.
 module Keter.App
     ( start
     , reload

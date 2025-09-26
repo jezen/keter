@@ -4,7 +4,6 @@
 {-# LANGUAGE TupleSections #-}
 
 -- | A light-weight, minimalistic reverse HTTP proxy.
--- Updated: apply precompiled middlewares; remove MiddlewareCache.
 module Keter.Proxy
     ( reverseProxy
     , makeSettings

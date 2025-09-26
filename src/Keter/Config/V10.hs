@@ -131,7 +131,6 @@ data KeterConfig = KeterConfig
     , kconfigRotateLogs           :: !Bool
     , kconfigHealthcheckPath      :: !(Maybe Text)
 
-    -- New: optional graceful drain delay (microseconds) before TERM during reload
     , kconfigGracefulDrainMicros  :: !(Maybe Int)
     }
 

@@ -3,7 +3,6 @@
 {-# LANGUAGE TypeFamilies #-}
 
 -- | Provides logging, versioning and some type aliases
--- Updated: middlewares are compiled at activation.
 module Keter.Common where
 
 import Control.Exception (Exception)
