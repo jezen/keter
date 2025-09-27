@@ -3,7 +3,7 @@
 ## 2.2.1
 - Fix unnecessary file reloading: https://github.com/snoyberg/keter/pull/320
 - bump tar
-- drop support 9.4, add 9.12
+- drop support 9.4, 9.6, add 9.12 and 9.14
 - change from haskell/action to haskell-action.
   it told me to:
    Warning: As of 2023-09-09, haskell/action/setup is no longer maintained, please switch to haskell-actions/setup (note: dash for slash).
