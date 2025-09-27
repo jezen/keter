@@ -60,9 +60,14 @@ testers.nixosTest {
           "deploy.sh" = deploy_sh { };
           "deploy2.sh" = deploy_sh { num = "2"; };
           "deploy3.sh" = deploy_sh { num = "3"; };
+
+          "slow.c" = {
+            source = ./slow.c;
+            mode = "0755";
+          };
         };
 
-        systemPackages = [ pkgs.netcat ];
+        systemPackages = [ pkgs.netcat pkgs.tinycc ];
       };
 
     imports = [
@@ -109,5 +114,18 @@ testers.nixosTest {
     server.succeed(". /etc/deploy3.sh") # Load new good script
     server.sleep(10)
     server.succeed("curl localhost | grep 'Test3!'") # bad script is unloaded and doesn't stuck
+
+    # issue#318 check the first slow loaded file is loaded only once
+    ## prepare
+    server.succeed("rm /opt/keter/incoming/nc.keter")
+    server.succeed("echo > /opt/keter/log/keter.log")
+    server.fail("grep -q 'Reloading from' /opt/keter/log/keter.log")
+    ## slow copy file
+    server.succeed("/etc/slow.c /tmp/nc.keter /opt/keter/incoming/nc.keter")
+    server.sleep(5) # wait when keter.log renewed
+    ## must be only one file reload
+    actual = int(server.succeed("grep 'Reloading from' /opt/keter/log/keter.log | wc -l"))
+    print("Actual=", actual)
+    assert 1 == actual, "bundle must be loaded only once"
   '';
 }
