@@ -228,7 +228,7 @@ addjustGlobalBound bound to = go `setLpsTimeBound` defaultLocalWaiProxySettings
            Just x | x > 0 -> Just x
            _              -> Nothing
 
--- | Perform a stanza action, applying precompiled middlewares.
+-- | Perform a stanza action, applying previously set up middlewares.
 performAction :: Manager
               -> ByteString               -- ^ onExceptBody
               -> Bool                     -- ^ isSecure

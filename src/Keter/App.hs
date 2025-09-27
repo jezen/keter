@@ -130,8 +130,8 @@ withActions bconfig f =
             <$> TLS.credentialLoadX509Chain certFile (V.toList chainCertFiles) keyFile
     loadCert _ = return mempty
 
-    compileMW :: [Keter.Config.Middleware.MiddlewareConfig] -> IO Middleware
-    compileMW = processMiddlewareIO
+    setupMW :: [Keter.Config.Middleware.MiddlewareConfig] -> IO Middleware
+    setupMW = processMiddlewareIO
 
     loop [] wacs backs actions = f wacs backs actions
     loop (Stanza (StanzaWebApp wac) rs:stanzas) wacs backs actions = do
@@ -141,7 +141,7 @@ withActions bconfig f =
           (rio (getPort ascPortPool) >>= either throwIO pure)
           (\port -> releasePort ascPortPool port)
           (\port -> do
-              mw <- compileMW (waconfigMiddleware wac)
+              mw <- setupMW (waconfigMiddleware wac)
               let wac' = wac { waconfigPort = port }
                   action = PAPort port mw (waconfigTimeout wac)
                   hosts = Set.toList $ Set.insert (waconfigApprootHost wac) (waconfigHosts wac)
@@ -155,7 +155,7 @@ withActions bconfig f =
 
     loop (Stanza (StanzaStaticFiles sfc) rs:stanzas) wacs backs actions0 = do
         cert <- liftIO $ loadCert $ sfconfigSsl sfc
-        mw <- liftIO $ compileMW (sfconfigMiddleware sfc)
+        mw <- liftIO $ setupMW (sfconfigMiddleware sfc)
         let action = PAStatic sfc mw
         loop stanzas wacs backs (actions action cert)
       where
@@ -176,7 +176,7 @@ withActions bconfig f =
 
     loop (Stanza (StanzaReverseProxy rev mid to) rs:stanzas) wacs backs actions0 = do
         cert <- liftIO $ loadCert $ reversingUseSSL rev
-        mw <- liftIO $ compileMW mid
+        mw <- liftIO $ setupMW mid
         let action = PAReverseProxy rev mw to
         loop stanzas wacs backs (Map.insert (CI.mk $ reversingHost rev) ((action, rs), cert) actions0)
 

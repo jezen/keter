@@ -1,0 +1,53 @@
+# Middlewares are configured per app in the bundle’s config/keter.yaml, not here.
+# Example (inside a bundle):
+#
+# stanzas:
+#   - type: webapp
+#     exec: ./my-app
+#     hosts: ["www.example.com"]
+#     middleware:
+#       - { rate-limiter:
+#           { zone_by: default
+#           , throttles:
+#               [ { name: "req/ip", limit: 100, period: 60, algorithm: "FixedWindow", identifier_by: "ip" } ]
+#           }
+#         }
+#
+#   - type: reverse-proxy
+#     host: "api.example.com"
+#     to: "http://127.0.0.1:9000"
+#     middleware:
+#       - { rate-limiter:
+#           { zone_by: { header: "X-Tenant-ID" }
+#           , throttles:
+#               [ { name: "api/key", limit: 1000, period: 3600, algorithm: "SlidingWindow", identifier_by: { header: "X-Api-Key" } } ]
+#           }
+#         }
+#
+#   - type: static-files
+#     root: ./static
+#     hosts: ["static.example.com"]
+#     middleware:
+#       - { rate-limiter:
+#           { zone_by: ip
+#           , throttles:
+#               [ { name: "static/ip", limit: 300, period: 60, algorithm: "LeakyBucket", identifier_by: "ip" } ]
+#           }
+#         }
+#
+# The following example is used in the minimal-rate-limiter-integration.nix 
+# in the root directory. You can define multiple stanzas and rulesets for rate limiter.
+stanzas:
+  - type: webapp
+    exec: ../bin/backend
+    hosts: ["rl.test", "xff.test"]
+    ensure-alive-time-bound: 3000000
+    middleware:
+      - rate-limiter:
+          zone_by: "default"
+          throttles:
+            - name: "ip"
+              limit: 4
+              period: 5
+              algorithm: "FixedWindow"
+              identifier_by: "ip"

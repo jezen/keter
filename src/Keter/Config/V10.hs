@@ -9,8 +9,8 @@
 --   - WebAppConfig.middleware :: [MiddlewareConfig]
 --     So webapp stanzas can declare edge middlewares (e.g., rate limiter)
 --     applied by Keter itself, without app code changes.
---   - ProxyActionRaw now carries a compiled Wai.Middleware. 
---     Middlewares are compiled at activation/reload time
+--   - ProxyActionRaw now carries a specified Wai.Middleware. 
+--     Middlewares are set up at activation/reload time
 --     (in Keter.App) to avoid runtime caching and preserve isolation.
 module Keter.Config.V10 where
 
@@ -223,7 +223,7 @@ data StanzaRaw port
     | StanzaRedirect !RedirectConfig
     | StanzaWebApp !(WebAppConfig port)
     -- StanzaReverseProxy keeps middleware configs here for parsing and
-    -- ToJSON. It is compiled later (in App.withActions) into a Middleware
+    -- ToJSON. It is set up later (in App.withActions) into a Middleware
     -- stored inside ProxyActionRaw.PAReverseProxy.
     | StanzaReverseProxy !ReverseProxyConfig ![ MiddlewareConfig ] !(Maybe Int)
     | StanzaBackground !BackgroundConfig
@@ -238,11 +238,11 @@ data StanzaRaw port
 --
 -- 2. Not all stanzas have an associated proxy action.
 --
--- Now carries compiled Wai.Middleware:
+-- Now carries set up Wai.Middleware:
 --   PAPort: webapp local proxy wrapped with 'Middleware'
 --   PAStatic: StaticFilesConfig still holds middleware configs at parse time;
---             we compile them in App and then apply in Proxy.
---   PAReverseProxy: compiled middleware baked in.
+--             we set them up in App and then apply in Proxy.
+--   PAReverseProxy: set up middleware baked in.
 data ProxyActionRaw
     = PAPort Port !Middleware !(Maybe Int)
     | PAStatic StaticFilesConfig !Middleware
