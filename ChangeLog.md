@@ -3,6 +3,7 @@
 ## 2.2.1
 - Fix unnecessary file reloading: https://github.com/snoyberg/keter/pull/320
 - bump tar
+- drop support 9.4, add 9.12
 
 ## 2.2.0
 
