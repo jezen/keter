@@ -1,5 +1,9 @@
 # Changelog
 
+## 2.2.1
+- Fix unnecessary file reloading: https://github.com/snoyberg/keter/pull/320
+- bump tar
+
 ## 2.2.0
 
 - **Dependency bounds:** Raised lower bound of `http-reverse-proxy` to `>= 0.6.2.0`.
