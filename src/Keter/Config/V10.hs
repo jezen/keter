@@ -4,14 +4,6 @@
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE TypeFamilies #-}
 
--- | Keter config format V10.
--- This version adds:
---   - WebAppConfig.middleware :: [MiddlewareConfig]
---     So webapp stanzas can declare edge middlewares (e.g., rate limiter)
---     applied by Keter itself, without app code changes.
---   - ProxyActionRaw now carries a specified Wai.Middleware. 
---     Middlewares are set up at activation/reload time
---     (in Keter.App) to avoid runtime caching and preserve isolation.
 module Keter.Config.V10 where
 
 import Control.Applicative ((<|>))

@@ -69,8 +69,8 @@
             keter-rate-limiting-plugin = (hprev.callHackageDirect
               {
                 pkg = "keter-rate-limiting-plugin";
-                ver = "0.2.0.0";
-                sha256 = "sha256-DqZ/8s82CJaXaKpvLOTX74i5KPS4HgQO63t/umsctbA=";
+                ver = "0.2.0.1";
+                sha256 = "sha256-wQs9AZf2UlrTCvuhV/MC81Y9F2C7IZxq2cwTT+lN0EI=";
               }
               { }).overrideAttrs (oldAttrs: {
                 librarySystemDepends = (oldAttrs.librarySystemDepends or []) ++ [ prev.zlib ];

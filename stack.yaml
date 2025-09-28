@@ -13,4 +13,4 @@ extra-deps:
   - http-reverse-proxy-0.6.2.0
 
   # Add keter-rate-limiting-plugin
-  - keter-rate-limiting-plugin-0.2.0.0
+  - keter-rate-limiting-plugin-0.2.0.1

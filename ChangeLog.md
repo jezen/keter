@@ -3,10 +3,7 @@
 ## 2.3.0
 
 - Add integration with keter-rate-limiting-plugin. [301](https://github.com/snoyberg/keter/issues/301)
-- Provided additional possiblities to apply middlewares per-app.
-- Added some integration tests for the new functionality.
-- Change some function signatures in dependent modules for integration.
-- Some documentation improvements.
+- Provided additional possibilities to apply middlewares per-app.
 
 ## 2.2.0
 
