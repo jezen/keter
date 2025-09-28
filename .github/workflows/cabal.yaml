@@ -8,15 +8,15 @@ jobs:
       fail-fast: false
       matrix:
         ghc: # should mirror current stable releases: https://www.haskell.org/ghc/download.html
+          - '9.12'
           - '9.10'
           - '9.8'
           - '9.6'
-          - '9.4'
         os: [ubuntu-latest, macOS-latest]
 
     steps:
     - uses: actions/checkout@v3
-    - uses: haskell/actions/setup@v2 # https://github.com/haskell/actions/tree/main/setup#haskellactionssetup
+    - uses: haskell-actions/setup@v2 # https://github.com/haskell/actions/tree/main/setup#haskellactionssetup
       with:
         ghc-version: ${{ matrix.ghc }}
 
