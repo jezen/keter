@@ -478,7 +478,7 @@ It is related to the issue [#301](https://github.com/snoyberg/keter/issues/301)
 
 More information about rate limiting middleware is available on the 
 Hackage webpage of it in the README there:
-[https://hackage.haskell.org/package/keter-rate-limiting-plugin-0.2.0.1](https://hackage.haskell.org/package/keter-rate-limiting-plugin-0.2.0.1)
+[https://hackage.haskell.org/package/keter-rate-limiting-plugin-0.2.0.2](https://hackage.haskell.org/package/keter-rate-limiting-plugin-0.2.0.2)
 
 ### Global daemon settings impacting behavior (keter-config.yaml):
 

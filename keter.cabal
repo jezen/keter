@@ -49,7 +49,7 @@ library
     , http-reverse-proxy    >=0.6.2    && <0.7
     , http-types            >=0.12.3   && <0.13
     , indexed-traversable   >=0.1.2    && <0.2
-    , keter-rate-limiting-plugin ==0.2.0.1
+    , keter-rate-limiting-plugin ==0.2.0.2
     , lifted-base           >=0.2.3    && <0.3
     , monad-logger          >=0.3.0    && <0.4.0
     , mtl                   >=2.2.2    && <2.3     || ^>=2.3.1
