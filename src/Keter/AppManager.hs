@@ -20,6 +20,7 @@ module Keter.AppManager
     ) where
 
 import Control.Applicative
+import Codec.Compression.GZip (decompress)
 import Control.Concurrent (forkIO, threadDelay)
 import Control.Concurrent.MVar (MVar, newMVar, withMVar)
 import Control.Concurrent.STM
@@ -30,6 +31,8 @@ import Control.Monad.IO.Class (liftIO)
 import Control.Monad.IO.Unlift (withRunInIO)
 import Control.Monad.Logger
 import Control.Monad.Reader (ask)
+import Data.ByteString qualified as B
+import Data.ByteString.Lazy qualified as L
 import Data.Foldable (fold)
 import Data.Map (Map)
 import Data.Map qualified as Map
@@ -297,10 +300,12 @@ addApp bundle = do
         return ()
     waitAndPerform = do
         waitUntilStable bundle
+        runable <- isGzip bundle
         AppManager {..} <- ask
         removeBundleFromQueue loads
-        (input, action) <- liftIO $ getInputForBundle bundle
-        perform input action
+        when runable $ do
+            (input, action) <- liftIO $ getInputForBundle bundle
+            perform input action
     putBundleIntoQueue loads = modifyTVar loads (bundle:)
     removeBundleFromQueue loads = liftIO $ atomically $ modifyTVar loads $ filter (/= bundle)
 
@@ -322,3 +327,15 @@ waitUntilStable path = liftIO $ loop Nothing
         when (new /= old) $ do
             threadDelay 1000000 -- wait 1 sec
             loop new
+
+isGzip :: FilePath -> KeterM AppManager Bool
+isGzip bundle = do
+    eres <- liftIO $ E.try @SomeException $ do
+        content <- B.concat . L.toChunks <$> fmap decompress (L.readFile bundle)
+        B.length content `seq` return ()
+
+    case eres of
+        Left _ -> do
+            $logError $ pack $ "File '" <> bundle <> "' is not gzip"
+            return False
+        Right _ -> return True
