@@ -1,8 +1,6 @@
 cabal-version:      3.0
 name:               keter
-
 version:            2.3.0
-
 synopsis:
   Web application deployment manager, focusing on Haskell web frameworks. It mitigates downtime.
 
@@ -108,8 +106,7 @@ library
     Keter.Aeson.KeyHelper
     Paths_keter
 
-  autogen-modules:
-    Paths_keter
+  autogen-modules:    Paths_keter
 
   ghc-options:        -Wall
   c-sources:          cbits/process-tracker.c

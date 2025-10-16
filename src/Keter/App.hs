@@ -7,7 +7,6 @@
 {-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeFamilies #-}
 
--- | Application lifecycle for a Keter bundle.
 module Keter.App
     ( start
     , reload
@@ -123,7 +122,6 @@ withActions :: BundleConfig
 withActions bconfig f =
     loop (V.toList $ bconfigStanzas bconfig) [] [] Map.empty
   where
-    -- Load TLS credentials for a stanza if applicable (SNI).
     -- todo: add loading from relative location
     loadCert (SSL certFile chainCertFiles keyFile) =
          either (const mempty) (TLS.Credentials . (:[]))
@@ -152,7 +150,6 @@ withActions bconfig f =
                 backs
                 (Map.unions $ actions : map (\host -> Map.singleton host ((action, rs), cert)) hosts)
           )
-
     loop (Stanza (StanzaStaticFiles sfc) rs:stanzas) wacs backs actions0 = do
         cert <- liftIO $ loadCert $ sfconfigSsl sfc
         mw <- liftIO $ setupMW (sfconfigMiddleware sfc)
@@ -163,7 +160,6 @@ withActions bconfig f =
           Map.unions $ actions0 :
             map (\host -> Map.singleton host ((action, rs), cert))
                 (Set.toList (sfconfigHosts sfc))
-
     loop (Stanza (StanzaRedirect red) rs:stanzas) wacs backs actions0 = do
         cert <- liftIO $ loadCert $ redirconfigSsl red
         let action = PARedirect red
@@ -173,13 +169,11 @@ withActions bconfig f =
           Map.unions $ actions0 :
             map (\host -> Map.singleton host ((action, rs), cert))
                 (Set.toList (redirconfigHosts red))
-
     loop (Stanza (StanzaReverseProxy rev mid to) rs:stanzas) wacs backs actions0 = do
         cert <- liftIO $ loadCert $ reversingUseSSL rev
         mw <- liftIO $ setupMW mid
         let action = PAReverseProxy rev mw to
         loop stanzas wacs backs (Map.insert (CI.mk $ reversingHost rev) ((action, rs), cert) actions0)
-
     loop (Stanza (StanzaBackground back) _:stanzas) wacs backs actions =
         loop stanzas wacs (back:backs) actions
 
@@ -237,23 +231,23 @@ start :: AppId
 start aid input tstate =
     withLogger aid Nothing $ \tAppLogger appLogger ->
     withConfig aid input $ \newdir bconfig mmodtime ->
-    withSanityChecks bconfig $ do
-      withReservations aid bconfig $ \webapps backs actions ->
-        withBackgroundApps aid bconfig newdir appLogger backs $ \runningBacks ->
-        withWebApps aid bconfig newdir appLogger webapps $ \runningWebapps -> do
-            asc@AppStartConfig{..} <- ask
-            liftIO $ mapM_ (ensureAlive tstate) runningWebapps
-            withMappedConfig (const ascHostManager) $ activateApp aid actions
-            liftIO $
-              App
-                <$> newTVarIO mmodtime
-                <*> newTVarIO runningWebapps
-                <*> newTVarIO runningBacks
-                <*> return aid
-                <*> newTVarIO (Map.keysSet actions)
-                <*> newTVarIO newdir
-                <*> return asc
-                <*> return tAppLogger
+    withSanityChecks bconfig $ 
+    withReservations aid bconfig $ \webapps backs actions ->
+    withBackgroundApps aid bconfig newdir appLogger backs $ \runningBacks ->
+    withWebApps aid bconfig newdir appLogger webapps $ \runningWebapps -> do
+        asc@AppStartConfig{..} <- ask
+        liftIO $ mapM_ (ensureAlive tstate) runningWebapps
+        withMappedConfig (const ascHostManager) $ activateApp aid actions
+        liftIO $
+          App
+            <$> newTVarIO mmodtime
+            <*> newTVarIO runningWebapps
+            <*> newTVarIO runningBacks
+            <*> return aid
+            <*> newTVarIO (Map.keysSet actions)
+            <*> newTVarIO newdir
+            <*> return asc
+            <*> return tAppLogger
 
 bracketedMap :: (a -> (b -> IO c) -> IO c)
              -> ([b] -> IO c)
@@ -592,28 +586,28 @@ reload input tstate = do
     withMappedConfig (const appAsc) $
       withLogger appId (Just appLog) $ \_ appLogger ->
       withConfig appId input $ \newdir bconfig mmodtime ->
-      withSanityChecks bconfig $ do
-        withReservations appId bconfig $ \webapps backs actions -> do
-          withBackgroundApps appId bconfig newdir appLogger backs $ \runningBacks ->
-            withWebApps appId bconfig newdir appLogger webapps $ \runningWebapps -> do
-              liftIO $ mapM_ (ensureAlive tstate) runningWebapps
-              liftIO (readTVarIO appHosts) >>= \hosts ->
-                withMappedConfig (const $ ascHostManager appAsc) $
-                  reactivateApp appId actions hosts
-              (oldApps, oldBacks, oldDir, oldRlog) <- liftIO $ atomically $ do
-                  oldApps <- readTVar appRunningWebApps
-                  oldBacks <- readTVar appBackgroundApps
-                  oldDir <- readTVar appDir
-                  oldRlog <- readTVar appLog
+      withSanityChecks bconfig $
+      withReservations appId bconfig $ \webapps backs actions -> 
+      withBackgroundApps appId bconfig newdir appLogger backs $ \runningBacks ->
+      withWebApps appId bconfig newdir appLogger webapps $ \runningWebapps -> do
+          liftIO $ mapM_ (ensureAlive tstate) runningWebapps
+          liftIO (readTVarIO appHosts) >>= \hosts ->
+            withMappedConfig (const $ ascHostManager appAsc) $
+              reactivateApp appId actions hosts
+          (oldApps, oldBacks, oldDir, oldRlog) <- liftIO $ atomically $ do
+              oldApps <- readTVar appRunningWebApps
+              oldBacks <- readTVar appBackgroundApps
+              oldDir <- readTVar appDir
+              oldRlog <- readTVar appLog
 
-                  writeTVar appModTime mmodtime
-                  writeTVar appRunningWebApps runningWebapps
-                  writeTVar appBackgroundApps runningBacks
-                  writeTVar appHosts $ Map.keysSet actions
-                  writeTVar appDir newdir
-                  return (oldApps, oldBacks, oldDir, oldRlog)
-              void $ withRunInIO $ \rio ->
-                forkIO $ rio $ terminateHelper appId oldApps oldBacks oldDir oldRlog
+              writeTVar appModTime mmodtime
+              writeTVar appRunningWebApps runningWebapps
+              writeTVar appBackgroundApps runningBacks
+              writeTVar appHosts $ Map.keysSet actions
+              writeTVar appDir newdir
+              return (oldApps, oldBacks, oldDir, oldRlog)
+          void $ withRunInIO $ \rio ->
+            forkIO $ rio $ terminateHelper appId oldApps oldBacks oldDir oldRlog
 
 terminate :: KeterM App ()
 terminate = do

@@ -23,9 +23,7 @@ import Network.Wai.Handler.Warp qualified as Warp
 import Network.Wreq qualified as Wreq
 import Test.Tasty
 import Test.Tasty.HUnit
-
 import qualified Keter.Proxy.MiddlewareSpec as ProxyMW
-
 
 main :: IO ()
 main = defaultMain keterTests

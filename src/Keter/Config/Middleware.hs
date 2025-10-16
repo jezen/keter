@@ -35,23 +35,20 @@ import Keter.RateLimiter.WAI
   , buildEnvFromConfig
   , buildRateLimiterWithEnv
   )
---------------------------------------------------------------------------------
--- Middleware config + RateLimiter
 
-data MiddlewareConfig
-  = AcceptOverride
-  | Autohead
-  | Jsonp
-  | MethodOverride
-  | MethodOverridePost
-  | AddHeaders ![(S.ByteString, S.ByteString)]
-  | BasicAuth !String ![(S.ByteString, S.ByteString)] -- Realm [(username,password)]
-  | Local !Int !L.ByteString                           -- Status Message
-  | RateLimiter !RateLimiterConfig                     -- New rate limiter
-  deriving (Show, Generic)
-
---------------------------------------------------------------------------------
--- JSON parsing/encoding
+data MiddlewareConfig = AcceptOverride
+                      | Autohead
+                      | Jsonp
+                      | MethodOverride
+                      | MethodOverridePost
+                      | AddHeaders ![(S.ByteString, S.ByteString)]
+                      | BasicAuth !String ![(S.ByteString, S.ByteString)] 
+                         -- ^ Realm [(username,password)]
+                      | Local !Int !L.ByteString
+                         -- ^ Status Message
+                      | RateLimiter !RateLimiterConfig
+                         -- ^ Rate Limiter
+          deriving (Show, Generic)
 
 instance FromJSON MiddlewareConfig where
   parseJSON (String "accept-override"     ) = pure AcceptOverride
@@ -100,8 +97,13 @@ instance ToJSON MiddlewareConfig where
                                , "message" .= TL.decodeUtf8 msg ] ]
   toJSON (RateLimiter rl) = object [ "rate-limiter" .= toJSON rl ]
 
---------------------------------------------------------------------------------
--- Building middleware (IO-aware)
+{-- Still missing
+-- Clean path
+-- Gzip
+-- RequestLogger
+-- Rewrite
+-- Vhost
+--}
 
 -- Build middlewares in IO, because the RateLimiter needs mutable state.
 processMiddlewareIO :: [MiddlewareConfig] -> IO Middleware
@@ -109,15 +111,12 @@ processMiddlewareIO cfgs = do
   mws <- mapM toMiddlewareIO cfgs
   pure (composeMiddleware mws)
 
--- Legacy/pure path; RateLimiter becomes a no-op here.
 processMiddleware :: [MiddlewareConfig] -> Middleware
-processMiddleware =
-  composeMiddleware . map toMiddlewarePure
+processMiddleware = composeMiddleware . map toMiddlewarePure
   where
     toMiddlewarePure (RateLimiter _) = id
     toMiddlewarePure x               = unsafeToMiddleware x
 
--- Compose like before: last in the list becomes the outermost wrapper.
 composeMiddleware :: [Middleware] -> Middleware
 composeMiddleware = foldl (flip (.)) id
 
@@ -133,7 +132,6 @@ unsafeToMiddleware (BasicAuth realm cred) =
 unsafeToMiddleware (AddHeaders headers) = addHeaders headers
 unsafeToMiddleware (RateLimiter _)      = id
 
--- IO-aware conversion (covers all cases, including RateLimiter)
 toMiddlewareIO :: MiddlewareConfig -> IO Middleware
 toMiddlewareIO AcceptOverride     = pure acceptOverride
 toMiddlewareIO Autohead           = pure autohead
@@ -144,7 +142,6 @@ toMiddlewareIO (Local s c)        = pure $ local (responseLBS (toEnum s) [] c)
 toMiddlewareIO (BasicAuth realm cred) =
   pure $ basicAuth (\u p -> pure $ (Just p ==) $ lookup u cred) (fromString realm)
 toMiddlewareIO (AddHeaders headers) = pure $ addHeaders headers
--- Important: build Env once and return a pure Middleware, no per-request setup.
 toMiddlewareIO (RateLimiter rl) = do
   env <- buildEnvFromConfig rl
   pure (buildRateLimiterWithEnv env)

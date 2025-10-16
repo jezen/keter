@@ -171,6 +171,7 @@ withClient isSecure = do
     logException a b = logErrorN $ pack $
       "Got a proxy exception on request " <> show a <> " with exception "  <> show b
 
+
     getDest :: ProxySettings -> (Wai.Request -> Bool) -> Wai.Request -> IO (LocalWaiProxySettings, WaiProxyResponse)
     -- respond to healthckecks, regardless of Host header value and presence
     getDest MkProxySettings{..} _ req

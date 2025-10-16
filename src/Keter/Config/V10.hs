@@ -214,9 +214,6 @@ data StanzaRaw port
     = StanzaStaticFiles !StaticFilesConfig
     | StanzaRedirect !RedirectConfig
     | StanzaWebApp !(WebAppConfig port)
-    -- StanzaReverseProxy keeps middleware configs here for parsing and
-    -- ToJSON. It is set up later (in App.withActions) into a Middleware
-    -- stored inside ProxyActionRaw.PAReverseProxy.
     | StanzaReverseProxy !ReverseProxyConfig ![ MiddlewareConfig ] !(Maybe Int)
     | StanzaBackground !BackgroundConfig
             -- FIXME console app
@@ -241,9 +238,8 @@ data ProxyActionRaw
     | PARedirect RedirectConfig
     | PAReverseProxy ReverseProxyConfig !Middleware !(Maybe Int)
 
-{-|
-The manual instance replaces the 'Middleware' values with "<middleware>" in the string representation since the actual middleware functions cannot be shown. This is a common pattern when dealing with function types that need to be part of data structures that require 'Show' instances.
--}
+-- | The manual instance replaces the 'Middleware' values with "<middleware>" 
+-- in the string representation since the actual middleware functions cannot be shown.
 instance Show ProxyActionRaw where
     show (PAPort port _ timeout) = 
         "PAPort " ++ show port ++ " <middleware> " ++ show timeout
@@ -414,8 +410,6 @@ instance ToJSON RedirectDest where
 
 type IsSecure = Bool
 
--- | WebAppConfig retains the user's middleware declarations; compilation happens
--- during activation in Keter.App.
 data WebAppConfig port = WebAppConfig
     { waconfigExec        :: !F.FilePath
     , waconfigArgs        :: !(Vector Text)
