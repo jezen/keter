@@ -2,8 +2,9 @@
 
 ## 2.3.0
 
-- Add integration with keter-rate-limiting-plugin. [301](https://github.com/snoyberg/keter/issues/301)
+- Add integration with keter-rate-limiting-plugin. [301](https://github.com/snoyberg/keter/issues/301), thanks @Oleksandr-Zhabenko
 - Provided additional possibilities to apply middlewares per-app.
+- Further improvements on unnecessary file reloading [318](https://github.com/snoyberg/keter/pull/323), thanks @ktak-007 
 
 ## 2.2.1
 - Fix unnecessary file reloading: https://github.com/snoyberg/keter/pull/320
