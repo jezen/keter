@@ -36,6 +36,7 @@ import Keter.Config.Middleware
 import Keter.Config.V04 qualified as V04
 import Keter.Rewrite (ReverseProxyConfig)
 import Keter.Yaml.FilePath
+import Network.Wai (Middleware)
 import Network.Wai.Handler.Warp qualified as Warp
 import System.FilePath qualified as F
 import System.Posix.Types (EpochTime)
@@ -121,6 +122,8 @@ data KeterConfig = KeterConfig
 
     , kconfigRotateLogs           :: !Bool
     , kconfigHealthcheckPath      :: !(Maybe Text)
+
+    , kconfigGracefulDrainMicros  :: !(Maybe Int)
     }
 
 instance ToCurrent KeterConfig where
@@ -142,6 +145,7 @@ instance ToCurrent KeterConfig where
         , kconfigProxyException = Nothing
         , kconfigRotateLogs = True
         , kconfigHealthcheckPath = Nothing
+        , kconfigGracefulDrainMicros = Nothing
         }
       where
         getSSL Nothing = V.empty
@@ -171,6 +175,7 @@ defaultKeterConfig = KeterConfig
         , kconfigProxyException = Nothing
         , kconfigRotateLogs = True
         , kconfigHealthcheckPath = Nothing
+        , kconfigGracefulDrainMicros = Nothing
         }
 
 instance ParseYamlFile KeterConfig where
@@ -197,6 +202,7 @@ instance ParseYamlFile KeterConfig where
             <*> o .:? "proxy-exception-response-file"
             <*> o .:? "rotate-logs" .!= True
             <*> o .:? "app-crash-hook"
+            <*> o .:? "graceful-drain-micros"
 
 -- | Whether we should force redirect to HTTPS routes.
 type RequiresSecure = Bool
@@ -220,12 +226,29 @@ data StanzaRaw port
 -- 1. Webapps will be assigned ports.
 --
 -- 2. Not all stanzas have an associated proxy action.
+--
+-- Now carries set up Wai.Middleware:
+--   PAPort: webapp local proxy wrapped with 'Middleware'
+--   PAStatic: StaticFilesConfig still holds middleware configs at parse time;
+--             we set them up in App and then apply in Proxy.
+--   PAReverseProxy: set up middleware baked in.
 data ProxyActionRaw
-    = PAPort Port !(Maybe Int)
-    | PAStatic StaticFilesConfig
+    = PAPort Port !Middleware !(Maybe Int)
+    | PAStatic StaticFilesConfig !Middleware
     | PARedirect RedirectConfig
-    | PAReverseProxy ReverseProxyConfig ![ MiddlewareConfig ] !(Maybe Int)
-    deriving Show
+    | PAReverseProxy ReverseProxyConfig !Middleware !(Maybe Int)
+
+-- | The manual instance replaces the 'Middleware' values with "<middleware>" 
+-- in the string representation since the actual middleware functions cannot be shown.
+instance Show ProxyActionRaw where
+    show (PAPort port _ timeout) = 
+        "PAPort " ++ show port ++ " <middleware> " ++ show timeout
+    show (PAStatic config _) = 
+        "PAStatic " ++ show config ++ " <middleware>"
+    show (PARedirect config) = 
+        "PARedirect " ++ show config
+    show (PAReverseProxy config _ timeout) = 
+        "PAReverseProxy " ++ show config ++ " <middleware> " ++ show timeout
 
 type ProxyAction = (ProxyActionRaw, RequiresSecure)
 
@@ -401,6 +424,9 @@ data WebAppConfig port = WebAppConfig
      -- | how long in microseconds the app gets before we expect it to bind to
      --   a port (default 90 seconds)
     , waconfigEnsureAliveTimeout :: !(Maybe Int)
+     -- | stanza-local WAI middlewares applied by Keter (e.g., rate limiter).
+     -- Parsed from YAML key "middleware". Default: [].
+    , waconfigMiddleware  :: ![ MiddlewareConfig ]
     }
     deriving Show
 
@@ -417,6 +443,7 @@ instance ToCurrent (WebAppConfig ()) where
         , waconfigForwardEnv = Set.empty
         , waconfigTimeout = Nothing
         , waconfigEnsureAliveTimeout = Nothing
+        , waconfigMiddleware = []
         }
 
 instance ParseYamlFile (WebAppConfig ()) where
@@ -441,6 +468,7 @@ instance ParseYamlFile (WebAppConfig ()) where
             <*> o .:? "forward-env" .!= Set.empty
             <*> o .:? "connection-time-bound"
             <*> o .:? "ensure-alive-time-bound"
+            <*> o .:? "middleware" .!= []
 
 instance ToJSON (WebAppConfig ()) where
     toJSON WebAppConfig {..} = object
@@ -451,6 +479,8 @@ instance ToJSON (WebAppConfig ()) where
         , "ssl" .= waconfigSsl
         , "forward-env" .= waconfigForwardEnv
         , "connection-time-bound" .= waconfigTimeout
+        , "ensure-alive-time-bound" .= waconfigEnsureAliveTimeout
+        , "middleware" .= waconfigMiddleware
         ]
 
 data AppInput = AIBundle !FilePath !EpochTime

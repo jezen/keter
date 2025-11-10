@@ -1,6 +1,6 @@
 {
   inputs = {
-    nixpkgs.url = "github:nixos/nixpkgs?ref=nixos-24.11";
+    nixpkgs.url = "github:nixos/nixpkgs?ref=nixos-25.05";
     flake-utils.url = "github:numtide/flake-utils";
   };
 
@@ -66,7 +66,17 @@
                   }
                   { };
 
-            tar = hprev.tar_0_6_3_0;
+            # Add keter-rate-limiting-plugin from Hackage
+            keter-rate-limiting-plugin = (hprev.callHackageDirect
+              {
+                pkg = "keter-rate-limiting-plugin";
+                ver = "0.2.0.2";
+                sha256 = "sha256-ngoymeitp7dsjvCI4uIrFhY8+BdaCsYdMVxd5solb5M=";
+              }
+              { }).overrideAttrs (oldAttrs: {
+                librarySystemDepends = (oldAttrs.librarySystemDepends or []) ++ [ prev.zlib ];
+                buildInputs = (oldAttrs.buildInputs or []) ++ [ prev.zlib ];
+              });
 
             keter =
               let

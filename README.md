@@ -465,6 +465,26 @@ if you need additional debug information.
 This option is disabled by default, but can be useful to
 figure out what keter is doing.
 
+## Rate Limiting Middleware (New in 2.3.0)
+
+The release 2.3.0 introduces a first-class, per-stanza rate-limiting 
+middleware you can attach to any app bundle (webapp, reverse-proxy, 
+static-files). It supports multiple algorithms (Fixed Window, 
+Sliding Window, Token Bucket, Leaky Bucket, TinyLRU), flexible 
+identifiers (IP, headers, cookies, combined), and zone separation 
+(by vhost, IP, or header). You can define multiple throttles 
+in one middleware block and also stack multiple middleware blocks. 
+It is related to the issue [#301](https://github.com/snoyberg/keter/issues/301)
+
+More information about rate limiting middleware is available on the 
+Hackage webpage of it in the README there:
+[https://hackage.haskell.org/package/keter-rate-limiting-plugin-0.2.0.2](https://hackage.haskell.org/package/keter-rate-limiting-plugin-0.2.0.2)
+
+### Global daemon settings impacting behavior (keter-config.yaml):
+
+* `ip-from-header`: influences throttles with `identifier_by: ip`.
+* `healthcheck-path`: this path is always allowed and never rate-limited.
+
 ## Contributing
 
 If you are interested in contributing, see

@@ -1,6 +1,6 @@
 cabal-version:      3.0
 name:               keter
-version:            2.2.1
+version:            2.3.0
 synopsis:
   Web application deployment manager, focusing on Haskell web frameworks. It mitigates downtime.
 
@@ -46,7 +46,8 @@ library
     , http-conduit          >=2.3.8    && <2.4
     , http-reverse-proxy    >=0.6.2    && <0.7
     , http-types            >=0.12.3   && <0.13
-    , indexed-traversable   >=0.1.2    && <0.2
+    , indexed-traversable   >=0.1.2    && <0.2.1
+    , keter-rate-limiting-plugin ==0.2.0.2
     , lifted-base           >=0.2.3    && <0.3
     , monad-logger          >=0.3.0    && <0.4.0
     , mtl                   >=2.2.2    && <2.3     || ^>=2.3.1
@@ -97,6 +98,7 @@ library
     Keter.Rewrite
     Keter.SharedData.App
     Keter.SharedData.AppManager
+
     Keter.TempTarball
     Keter.Yaml.FilePath
 
@@ -105,6 +107,7 @@ library
     Paths_keter
 
   autogen-modules:    Paths_keter
+
   ghc-options:        -Wall
   c-sources:          cbits/process-tracker.c
   hs-source-dirs:     src
@@ -128,8 +131,10 @@ test-suite test
   hs-source-dirs:     test
   default-extensions: ImportQualifiedPost
   main-is:            Spec.hs
+  other-modules:      Keter.Proxy.MiddlewareSpec
   type:               exitcode-stdio-1.0
   build-depends:
+    , aeson
     , base
     , bytestring
     , conduit
@@ -138,14 +143,17 @@ test-suite test
     , http-types
     , HUnit
     , keter
+    , keter-rate-limiting-plugin
     , lens
     , monad-logger
     , mtl
     , stm
     , tasty
     , tasty-hunit
+    , tls
     , transformers
     , unix
+    , unordered-containers
     , wai
     , warp
     , wreq

@@ -66,6 +66,9 @@ import System.Posix.Files (fileAccess)
 import System.Posix.Types (EpochTime)
 import System.Timeout (timeout)
 
+import Keter.Config.Middleware (processMiddlewareIO, MiddlewareConfig)
+import Network.Wai (Middleware)
+
 unpackBundle :: FilePath
              -> AppId
              -> KeterM AppStartConfig (FilePath, BundleConfig)
@@ -75,12 +78,9 @@ unpackBundle bundle aid = do
     liftIO $ unpackTempTar (fmap snd ascSetuid) ascTempFolder bundle folderName $ \dir -> do
         -- Get the FilePath for the keter yaml configuration. Tests for
         -- keter.yml and defaults to keter.yaml.
-        configFP <- do
-            let yml = dir </> "config" </> "keter.yml"
-            exists <- doesFileExist yml
-            return $ if exists then yml
-                               else dir </> "config" </> "keter.yaml"
-
+        let yml = dir </> "config" </> "keter.yml"
+        exists <- doesFileExist yml
+        let configFP = if exists then yml else dir </> "config" </> "keter.yaml"
         mconfig <- decodeFileRelative configFP
         config <-
             case mconfig of
@@ -128,43 +128,52 @@ withActions bconfig f =
             <$> TLS.credentialLoadX509Chain certFile (V.toList chainCertFiles) keyFile
     loadCert _ = return mempty
 
+    setupMW :: [Keter.Config.Middleware.MiddlewareConfig] -> IO Middleware
+    setupMW = processMiddlewareIO
+
     loop [] wacs backs actions = f wacs backs actions
     loop (Stanza (StanzaWebApp wac) rs:stanzas) wacs backs actions = do
       AppStartConfig{..} <- ask
       withRunInIO $ \rio ->
         liftIO $ bracketOnError
-          (rio (getPort ascPortPool) >>= either throwIO
-               (\p -> fmap (p,) <$> loadCert $ waconfigSsl wac)
+          (rio (getPort ascPortPool) >>= either throwIO pure)
+          (\port -> releasePort ascPortPool port)
+          (\port -> do
+              mw <- setupMW (waconfigMiddleware wac)
+              let wac' = wac { waconfigPort = port }
+                  action = PAPort port mw (waconfigTimeout wac)
+                  hosts = Set.toList $ Set.insert (waconfigApprootHost wac) (waconfigHosts wac)
+              cert <- loadCert (waconfigSsl wac)
+              rio $ loop
+                stanzas
+                (wac' : wacs)
+                backs
+                (Map.unions $ actions : map (\host -> Map.singleton host ((action, rs), cert)) hosts)
           )
-          (\(port, _)    -> releasePort ascPortPool port)
-          (\(port, cert) -> rio $ loop
-              stanzas
-              (wac { waconfigPort = port } : wacs)
-              backs
-              (Map.unions $ actions : map (\host -> Map.singleton host ((PAPort port (waconfigTimeout wac), rs), cert)) hosts))
-      where
-        hosts = Set.toList $ Set.insert (waconfigApprootHost wac) (waconfigHosts wac)
     loop (Stanza (StanzaStaticFiles sfc) rs:stanzas) wacs backs actions0 = do
         cert <- liftIO $ loadCert $ sfconfigSsl sfc
-        loop stanzas wacs backs (actions cert)
+        mw <- liftIO $ setupMW (sfconfigMiddleware sfc)
+        let action = PAStatic sfc mw
+        loop stanzas wacs backs (actions action cert)
       where
-        actions cert = Map.unions
-                $ actions0
-                : map (\host -> Map.singleton host ((PAStatic sfc, rs), cert))
-                  (Set.toList (sfconfigHosts sfc))
+        actions action cert =
+          Map.unions $ actions0 :
+            map (\host -> Map.singleton host ((action, rs), cert))
+                (Set.toList (sfconfigHosts sfc))
     loop (Stanza (StanzaRedirect red) rs:stanzas) wacs backs actions0 = do
         cert <- liftIO $ loadCert $ redirconfigSsl red
-        loop stanzas wacs backs (actions cert)
+        let action = PARedirect red
+        loop stanzas wacs backs (actions action cert)
       where
-        actions cert = Map.unions
-                $ actions0
-                : map (\host -> Map.singleton host ((PARedirect red, rs), cert))
-                  (Set.toList (redirconfigHosts red))
+        actions action cert =
+          Map.unions $ actions0 :
+            map (\host -> Map.singleton host ((action, rs), cert))
+                (Set.toList (redirconfigHosts red))
     loop (Stanza (StanzaReverseProxy rev mid to) rs:stanzas) wacs backs actions0 = do
         cert <- liftIO $ loadCert $ reversingUseSSL rev
-        loop stanzas wacs backs (actions cert)
-      where
-        actions cert = Map.insert (CI.mk $ reversingHost rev) ((PAReverseProxy rev mid to, rs), cert) actions0
+        mw <- liftIO $ setupMW mid
+        let action = PAReverseProxy rev mw to
+        loop stanzas wacs backs (Map.insert (CI.mk $ reversingHost rev) ((action, rs), cert) actions0)
     loop (Stanza (StanzaBackground back) _:stanzas) wacs backs actions =
         loop stanzas wacs (back:backs) actions
 
@@ -222,7 +231,7 @@ start :: AppId
 start aid input tstate =
     withLogger aid Nothing $ \tAppLogger appLogger ->
     withConfig aid input $ \newdir bconfig mmodtime ->
-    withSanityChecks bconfig $
+    withSanityChecks bconfig $ 
     withReservations aid bconfig $ \webapps backs actions ->
     withBackgroundApps aid bconfig newdir appLogger backs $ \runningBacks ->
     withWebApps aid bconfig newdir appLogger webapps $ \runningWebapps -> do
@@ -578,7 +587,7 @@ reload input tstate = do
       withLogger appId (Just appLog) $ \_ appLogger ->
       withConfig appId input $ \newdir bconfig mmodtime ->
       withSanityChecks bconfig $
-      withReservations appId bconfig $ \webapps backs actions ->
+      withReservations appId bconfig $ \webapps backs actions -> 
       withBackgroundApps appId bconfig newdir appLogger backs $ \runningBacks ->
       withWebApps appId bconfig newdir appLogger webapps $ \runningWebapps -> do
           liftIO $ mapM_ (ensureAlive tstate) runningWebapps
@@ -635,7 +644,9 @@ terminateHelper :: AppId
                 -> Maybe Logger
                 -> KeterM AppStartConfig ()
 terminateHelper aid apps backs mdir _appLogger = do
-    liftIO $ threadDelay $ 20 * 1000 * 1000
+    AppStartConfig{..} <- ask
+    let preDelay = maybe (20 * 1000 * 1000) id (kconfigGracefulDrainMicros ascKeterConfig)
+    liftIO $ threadDelay preDelay
     $logInfo $ pack $
         "Sending old process TERM signal: "
           ++ case aid of { AINamed t -> unpack t; AIBuiltin -> "builtin" }

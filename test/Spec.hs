@@ -23,6 +23,7 @@ import Network.Wai.Handler.Warp qualified as Warp
 import Network.Wreq qualified as Wreq
 import Test.Tasty
 import Test.Tasty.HUnit
+import qualified Keter.Proxy.MiddlewareSpec as ProxyMW
 
 main :: IO ()
 main = defaultMain keterTests
@@ -34,6 +35,7 @@ keterTests =
     [ testCase "Subdomain Integrity" caseSubdomainIntegrity
     , testCase "Wildcard Domains" caseWildcards
     , testCase "Head then post doesn't crash" headThenPostNoCrash
+    , ProxyMW.tests
     ]
 
 caseSubdomainIntegrity :: IO ()
@@ -64,8 +66,10 @@ headThenPostNoCrash = do
       void $ Wai.strictRequestBody req
       resp $ Wai.responseLBS ok200 [] "ok"
 
+  settings' <- settings manager  -- Now use <- since settings returns IO
+
   _ <- forkIO $
-    flip runReaderT (settings manager) $
+    flip runReaderT settings' $
       flip runLoggingT (\_ _ _ msg -> atomically $ writeTQueue exceptions msg) $
         filterLogger isException $
           runKeterM $
@@ -88,14 +92,16 @@ headThenPostNoCrash = do
     isException _ LevelError = True
     isException _ _ = False
 
-    settings :: Manager -> ProxySettings
-    settings manager = MkProxySettings {
-        psHostLookup     = const $ pure $ Just ((PAPort 6781 Nothing, False), error "unused tls certificate")
-      , psManager        = manager
-      , psUnknownHost    = const ""
-      , psMissingHost    = ""
-      , psProxyException = ""
-      , psIpFromHeader   = False
-      , psConnectionTimeBound = 5 * 60 * 1000
-      , psHealthcheckPath = Nothing
-      }
+    settings :: Manager -> IO ProxySettings  -- Now returns IO ProxySettings
+    settings manager = do
+      -- Remove MiddlewareCache usage - middlewares are now compiled at activation
+      pure $ MkProxySettings {
+          psHostLookup     = const $ pure $ Just ((PAPort 6781 id Nothing, False), error "unused tls certificate")
+        , psManager        = manager
+        , psUnknownHost    = const ""
+        , psMissingHost    = ""
+        , psProxyException = ""
+        , psIpFromHeader   = False
+        , psConnectionTimeBound = 5 * 60 * 1000
+        , psHealthcheckPath = Nothing
+        }

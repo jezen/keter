@@ -21,13 +21,20 @@ import Network.Wai.Middleware.Local (local)
 import Network.Wai.Middleware.MethodOverride (methodOverride)
 import Network.Wai.Middleware.MethodOverridePost (methodOverridePost)
 
-import Data.ByteString as S (ByteString)
-import Data.ByteString.Lazy as L (ByteString)
+import qualified Data.ByteString as S
+import qualified Data.ByteString.Lazy as L
 
 import Data.String (fromString)
-import Data.Text.Encoding as T (decodeUtf8, encodeUtf8)
-import Data.Text.Lazy.Encoding as TL (decodeUtf8, encodeUtf8)
-import Keter.Aeson.KeyHelper qualified as AK (empty, toKey, toList, toText)
+import qualified Data.Text.Encoding as T
+import qualified Data.Text.Lazy.Encoding as TL
+import qualified Keter.Aeson.KeyHelper as AK (empty, toKey, toList, toText)
+
+-- Rate limiter (updated API: buildEnvFromConfig + buildRateLimiterWithEnv)
+import Keter.RateLimiter.WAI
+  ( RateLimiterConfig(..)
+  , buildEnvFromConfig
+  , buildRateLimiterWithEnv
+  )
 
 data MiddlewareConfig = AcceptOverride
                       | Autohead
@@ -35,11 +42,13 @@ data MiddlewareConfig = AcceptOverride
                       | MethodOverride
                       | MethodOverridePost
                       | AddHeaders ![(S.ByteString, S.ByteString)]
-                      | BasicAuth !String ![(S.ByteString, S.ByteString)]
+                      | BasicAuth !String ![(S.ByteString, S.ByteString)] 
                          -- ^ Realm [(username,password)]
                       | Local !Int !L.ByteString
                          -- ^ Status Message
-          deriving (Show,Generic)
+                      | RateLimiter !RateLimiterConfig
+                         -- ^ Rate Limiter
+          deriving (Show, Generic)
 
 instance FromJSON MiddlewareConfig where
   parseJSON (String "accept-override"     ) = pure AcceptOverride
@@ -48,13 +57,24 @@ instance FromJSON MiddlewareConfig where
   parseJSON (String "method-override"     ) = pure MethodOverride
   parseJSON (String "method-override-post") = pure MethodOverridePost
   parseJSON (Object o) =
-     case AK.toList o of
-      [("basic-auth", Object o')] -> BasicAuth  <$> o' .:? "realm" .!= "keter"
-                                                <*> (map ((T.encodeUtf8 . AK.toText) *** T.encodeUtf8) . AK.toList <$> o' .:? "creds"   .!= AK.empty)
-      [("headers"   , Object _ )]    -> AddHeaders . map ((T.encodeUtf8 . AK.toText) *** T.encodeUtf8) . AK.toList <$> o  .:? "headers" .!= AK.empty
-      [("local"     , Object o')] -> Local  <$> o' .:? "status" .!=  401
-                                            <*> (TL.encodeUtf8 <$> o' .:? "message" .!= "Unauthorized Accessing from Localhost ONLY" )
-      _                      -> mzero -- fail "Rule: unexpected format"
+    case AK.toList o of
+      [("basic-auth", Object o')] ->
+        BasicAuth  <$> o' .:? "realm" .!= "keter"
+                   <*> (map ((T.encodeUtf8 . AK.toText) *** T.encodeUtf8)
+                       . AK.toList <$> o' .:? "creds" .!= AK.empty)
+
+      [("headers", Object _ )] ->
+        AddHeaders . map ((T.encodeUtf8 . AK.toText) *** T.encodeUtf8)
+          . AK.toList <$> o .:? "headers" .!= AK.empty
+
+      [("local", Object o')] ->
+        Local <$> o' .:? "status" .!= 401
+              <*> (TL.encodeUtf8 <$> o' .:? "message"
+                   .!= "Unauthorized Accessing from Localhost ONLY")
+
+      [("rate-limiter", v)] -> RateLimiter <$> parseJSON v
+
+      _ -> mzero
   parseJSON _ = mzero
 
 instance ToJSON MiddlewareConfig where
@@ -63,38 +83,65 @@ instance ToJSON MiddlewareConfig where
   toJSON Jsonp              = "jsonp"
   toJSON MethodOverride     = "method-override"
   toJSON MethodOverridePost = "method-override-post"
-  toJSON (BasicAuth realm cred) = object [ "basic-auth" .= object [ "realm" .= realm
-                                                                  , "creds" .= object ( map ( (AK.toKey . T.decodeUtf8) *** (String . T.decodeUtf8)) cred )
-                                                                  ]
-                                         ]
-  toJSON (AddHeaders headers)   = object [ "headers"    .= object ( map ((AK.toKey . T.decodeUtf8) *** String . T.decodeUtf8) headers)  ]
-  toJSON (Local sc msg)         = object [ "local"      .= object [ "status" .= sc
-                                                                  , "message" .=  TL.decodeUtf8 msg
-                                                                  ]
-                                         ]
-
+  toJSON (BasicAuth realm cred) =
+    object [ "basic-auth" .= object
+              [ "realm" .= realm
+              , "creds" .= object
+                  (map ((AK.toKey . T.decodeUtf8) *** (String . T.decodeUtf8)) cred)
+              ] ]
+  toJSON (AddHeaders headers) =
+    object [ "headers" .= object
+              (map ((AK.toKey . T.decodeUtf8) *** String . T.decodeUtf8) headers) ]
+  toJSON (Local sc msg) =
+    object [ "local" .= object [ "status" .= sc
+                               , "message" .= TL.decodeUtf8 msg ] ]
+  toJSON (RateLimiter rl) = object [ "rate-limiter" .= toJSON rl ]
 
 {-- Still missing
--- CleanPath
+-- Clean path
 -- Gzip
 -- RequestLogger
 -- Rewrite
 -- Vhost
 --}
 
+-- Build middlewares in IO, because the RateLimiter needs mutable state.
+processMiddlewareIO :: [MiddlewareConfig] -> IO Middleware
+processMiddlewareIO cfgs = do
+  mws <- mapM toMiddlewareIO cfgs
+  pure (composeMiddleware mws)
+
 processMiddleware :: [MiddlewareConfig] -> Middleware
-processMiddleware = composeMiddleware . map toMiddleware
+processMiddleware = composeMiddleware . map toMiddlewarePure
+  where
+    toMiddlewarePure (RateLimiter _) = id
+    toMiddlewarePure x               = unsafeToMiddleware x
 
-toMiddleware :: MiddlewareConfig -> Middleware
-toMiddleware AcceptOverride     = acceptOverride
-toMiddleware Autohead           = autohead
-toMiddleware Jsonp              = jsonp
-toMiddleware (Local s c )       = local ( responseLBS (toEnum s) [] c )
-toMiddleware MethodOverride     = methodOverride
-toMiddleware MethodOverridePost = methodOverridePost
-toMiddleware (BasicAuth realm cred) = basicAuth (\u p -> return $ (Just p ==) $ lookup u cred ) (fromString realm)
-toMiddleware (AddHeaders headers)   = addHeaders headers
-
--- composeMiddleware :
 composeMiddleware :: [Middleware] -> Middleware
 composeMiddleware = foldl (flip (.)) id
+
+unsafeToMiddleware :: MiddlewareConfig -> Middleware
+unsafeToMiddleware AcceptOverride     = acceptOverride
+unsafeToMiddleware Autohead           = autohead
+unsafeToMiddleware Jsonp              = jsonp
+unsafeToMiddleware MethodOverride     = methodOverride
+unsafeToMiddleware MethodOverridePost = methodOverridePost
+unsafeToMiddleware (Local s c)        = local (responseLBS (toEnum s) [] c)
+unsafeToMiddleware (BasicAuth realm cred) =
+  basicAuth (\u p -> pure $ (Just p ==) $ lookup u cred) (fromString realm)
+unsafeToMiddleware (AddHeaders headers) = addHeaders headers
+unsafeToMiddleware (RateLimiter _)      = id
+
+toMiddlewareIO :: MiddlewareConfig -> IO Middleware
+toMiddlewareIO AcceptOverride     = pure acceptOverride
+toMiddlewareIO Autohead           = pure autohead
+toMiddlewareIO Jsonp              = pure jsonp
+toMiddlewareIO MethodOverride     = pure methodOverride
+toMiddlewareIO MethodOverridePost = pure methodOverridePost
+toMiddlewareIO (Local s c)        = pure $ local (responseLBS (toEnum s) [] c)
+toMiddlewareIO (BasicAuth realm cred) =
+  pure $ basicAuth (\u p -> pure $ (Just p ==) $ lookup u cred) (fromString realm)
+toMiddlewareIO (AddHeaders headers) = pure $ addHeaders headers
+toMiddlewareIO (RateLimiter rl) = do
+  env <- buildEnvFromConfig rl
+  pure (buildRateLimiterWithEnv env)
