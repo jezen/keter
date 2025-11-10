@@ -4,6 +4,7 @@
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE DoAndIfThenElse #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 -- | Used for management of applications.
 module Keter.AppManager
     ( -- * Types
@@ -19,17 +20,26 @@ module Keter.AppManager
     , renderApps
     ) where
 
+import Conduit (sourceFile, (.|), ConduitT, ResourceT, runResourceT, runConduit, awaitForever, sinkNull)
 import Control.Applicative
 import Control.Concurrent (forkIO, threadDelay)
 import Control.Concurrent.MVar (MVar, newMVar, withMVar)
 import Control.Concurrent.STM
 import Control.Exception (SomeException)
 import Control.Exception qualified as E
-import Control.Monad (forM_, void, when)
+import Control.Monad (forM_, void, when, unless)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.IO.Unlift (withRunInIO)
 import Control.Monad.Logger
 import Control.Monad.Reader (ask)
+import Control.Monad.State (runStateT, StateT, modify)
+import Data.Binary (Word32)
+import Data.Binary.Get (getWord32le, runGet)
+import Data.Bits (Bits((.|.), shiftR))
+import qualified Data.ByteString.Char8 as C
+import Data.ByteString.Lazy qualified as BL
+import Data.Conduit.Zlib (ungzip)
+import Data.Conduit (yield)
 import Data.Foldable (fold)
 import Data.Map (Map)
 import Data.Map qualified as Map
@@ -297,10 +307,12 @@ addApp bundle = do
         return ()
     waitAndPerform = do
         waitUntilStable bundle
+        runable <- isGzip bundle
         AppManager {..} <- ask
         removeBundleFromQueue loads
-        (input, action) <- liftIO $ getInputForBundle bundle
-        perform input action
+        when runable $ do
+            (input, action) <- liftIO $ getInputForBundle bundle
+            perform input action
     putBundleIntoQueue loads = modifyTVar loads (bundle:)
     removeBundleFromQueue loads = liftIO $ atomically $ modifyTVar loads $ filter (/= bundle)
 
@@ -322,3 +334,35 @@ waitUntilStable path = liftIO $ loop Nothing
         when (new /= old) $ do
             threadDelay 1000000 -- wait 1 sec
             loop new
+
+isGzip :: FilePath -> KeterM AppManager Bool
+isGzip bundle = do
+    res <- liftIO $ either (const $ return False) checkSizes
+        =<< E.try @SomeException
+        ( runResourceT . flip runStateT (0, 0) . runConduit
+        $ sourceFile bundle
+       .| readSize
+       .| ungzip
+       .| countSize
+       .| sinkNull
+        )
+    unless res $ $logError $ pack $ "File '" <> bundle <> "' is not gzip"
+    return res
+    where
+    checkSizes (_, (size, counter)) = return $ size >0 && size == counter
+
+readSize :: ConduitT C.ByteString C.ByteString (StateT (Word32, Word32) (ResourceT IO)) ()
+readSize = awaitForever $ \chunk -> do
+    let footer = BL.takeEnd 4 $ BL.fromStrict chunk
+        footerLength = BL.length footer
+        nullPrefix = BL.take (4 - footerLength) (BL.repeat 0)
+        size = runGet getWord32le $ nullPrefix <> footer
+    modify $ \(prevSize, counter) ->
+        let newSize = shiftR prevSize (8 * fromIntegral footerLength) .|. size
+        in (newSize, counter)
+    yield chunk
+
+countSize :: ConduitT C.ByteString C.ByteString (StateT (Word32, Word32) (ResourceT IO)) ()
+countSize = awaitForever $ \chunk -> do
+    modify $ \(size, counter) -> (size, counter + fromIntegral (C.length chunk))
+    yield chunk

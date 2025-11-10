@@ -1,43 +1,45 @@
 #!/usr/bin/env -S tcc -run
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <unistd.h>
 
 #define CHUNK 50
-#define DELAY 300*1000 // microseconds
 
 int main(int argc, char **argv)
 {
-    FILE *h, *oh;
+    FILE *hSrc, *hDst;
     char buf[CHUNK];
     size_t bytesRead;
 
-    if (argc != 3) {
-        printf("Slow file copy.\nUsage: %s <SRC> <DST>\n", argv[0]);
+    if (argc != 4) {
+        printf("Slow file copy.\nUsage: %s <DELAY (milliseconds)> <SRC> <DST>\n", argv[0]);
         return 1;
     }
 
-    h = fopen(argv[1], "r");
-    if (h == NULL) {
+    int delay = atoi(argv[1]) * 1000;
+    char *src = argv[2];
+    char *dst = argv[3];
+
+    if (!(hSrc = fopen(src, "r"))) {
         printf("Error: can't open SRC file!\n");
         return 1;
     }
 
-    oh = fopen(argv[2], "w");
-    if (oh == NULL) {
+    if (!(hDst = fopen(dst, "w"))) {
         printf("Error: can't open DST file!\n");
         return 1;
     }
 
-    while (!feof(h)) {
-        bytesRead = fread(buf, sizeof(char), CHUNK, h);
-        usleep(DELAY);
-        fwrite(buf, sizeof(char), bytesRead, oh);
-        fflush(oh);
+    while (!feof(hSrc)) {
+        bytesRead = fread(buf, sizeof(char), CHUNK, hSrc);
+        usleep(delay);
+        fwrite(buf, sizeof(char), bytesRead, hDst);
+        fflush(hDst);
     }
 
-    fclose(h);
-    fclose(oh);
+    fclose(hSrc);
+    fclose(hDst);
 
     return 0;
 }

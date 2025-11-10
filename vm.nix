@@ -115,17 +115,41 @@ testers.nixosTest {
     server.sleep(10)
     server.succeed("curl localhost | grep 'Test3!'") # bad script is unloaded and doesn't stuck
 
-    # issue#318 check the first slow loaded file is loaded only once
+    # issue#318 check the first slow loaded file is loaded only once, delay < interval
     ## prepare
     server.succeed("rm /opt/keter/incoming/nc.keter")
     server.succeed("echo > /opt/keter/log/keter.log")
     server.fail("grep -q 'Reloading from' /opt/keter/log/keter.log")
     ## slow copy file
-    server.succeed("/etc/slow.c /tmp/nc.keter /opt/keter/incoming/nc.keter")
+    server.succeed("/etc/slow.c 300 /tmp/nc.keter /opt/keter/incoming/nc.keter")
     server.sleep(5) # wait when keter.log renewed
     ## must be only one file reload
     actual = int(server.succeed("grep 'Reloading from' /opt/keter/log/keter.log | wc -l"))
-    print("Actual=", actual)
-    assert 1 == actual, "bundle must be loaded only once"
+    assert 1 == actual, "bundle must be loaded only once (actual = %d)" % actual
+
+    # issue#318 check the first slow loaded file is loaded only once, delay > interval
+    ## prepare
+    server.succeed("rm /opt/keter/incoming/nc.keter")
+    server.succeed("echo > /opt/keter/log/keter.log")
+    server.fail("grep -q 'Reloading from' /opt/keter/log/keter.log")
+    ## slow copy file
+    server.succeed("/etc/slow.c 3000 /tmp/nc.keter /opt/keter/incoming/nc.keter")
+    server.sleep(5) # wait when keter.log renewed
+    ## must be only one file reload
+    actual = int(server.succeed("grep 'Reloading from' /opt/keter/log/keter.log | wc -l"))
+    assert 1 == actual, "bundle must be loaded only once (actual = %d)" % actual
+
+    # issue#318 check the renamed file is loaded only once
+    ## prepare
+    server.succeed("rm /opt/keter/incoming/nc.keter")
+    server.succeed("echo > /opt/keter/log/keter.log")
+    server.fail("grep -q 'Reloading from' /opt/keter/log/keter.log")
+    ## copy tmp file and rename it
+    server.succeed("cp /tmp/nc.keter /opt/keter/incoming/nc.keter.tmp")
+    server.succeed("mv /opt/keter/incoming/nc.keter.tmp /opt/keter/incoming/nc.keter")
+    server.sleep(5) # wait when keter.log renewed
+    ## must be only one file reload
+    actual = int(server.succeed("grep 'Reloading from' /opt/keter/log/keter.log | wc -l"))
+    assert 1 == actual, "bundle must be loaded only once (actual = %d)" % actual
   '';
 }

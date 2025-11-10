@@ -1,0 +1,78 @@
+@startuml SlowCopy
+'https://plantuml.com/sequence-diagram
+
+title Slow copy file into 'incoming' folder
+
+actor Client
+participant System
+control Main.startWatching as watcher
+participant AppMan.addApp as addApp
+entity bundle
+
+Client -> System: Copy file
+activate System
+System -> watcher: add/modify
+activate watcher
+watcher -> addApp: incoming bundle
+activate addApp
+addApp -> bundle: lock
+activate bundle
+addApp -> waitAndPerform: forkIO
+activate waitAndPerform
+addApp --> watcher: return
+deactivate addApp
+deactivate watcher
+
+System -> watcher: modify
+activate watcher
+watcher -> addApp: incoming bundle
+activate addApp
+addApp --> watcher: already locked
+destroy addApp
+deactivate watcher
+
+waitAndPerform -> waitAndPerform: waitUntilStable
+activate waitAndPerform
+deactivate waitAndPerform
+waitAndPerform -> waitAndPerform: runable <- isGzip
+waitAndPerform -> bundle: unlock
+deactivate bundle
+
+note right
+  nothing to do
+  as the file is copying yet
+  as runable is False
+end note
+
+deactivate waitAndPerform
+
+System -> watcher: modify
+activate watcher
+watcher -> addApp: incoming bundle
+activate addApp
+addApp -> bundle: lock
+activate bundle
+addApp -> waitAndPerform: forkIO
+activate waitAndPerform
+addApp --> watcher: return
+deactivate addApp
+deactivate watcher
+
+waitAndPerform -> waitAndPerform: waitUntilStable
+activate waitAndPerform
+System -->> waitAndPerform: (end of file)
+deactivate waitAndPerform
+deactivate System
+waitAndPerform -> waitAndPerform: runable <- isGzip
+waitAndPerform -> bundle: unlock
+deactivate bundle
+
+alt #LightGreen runable
+  waitAndPerform -> perform: run
+else #Pink probably this is not gzip
+  hnote over waitAndPerform: nope
+end
+
+deactivate waitAndPerform
+
+@enduml
