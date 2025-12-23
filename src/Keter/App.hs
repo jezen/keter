@@ -327,11 +327,13 @@ launchWebApp aid BundleConfig {..} mdir appLogger WebAppConfig {..} f = do
             AIBuiltin -> "__builtin__"
             AINamed x -> x
 
-killWebApp :: RunningWebApp -> KeterM cfg ()
+killWebApp :: RunningWebApp -> KeterM AppStartConfig ()
 killWebApp RunningWebApp {..} = do
+    AppStartConfig{..} <- ask
     status <- liftIO $ printStatus rwaProcess
     $logInfo $ pack $ "Killing " <> unpack status <> " running on port: "  <> show rwaPort
     liftIO $ terminateMonitoredProcess rwaProcess
+    liftIO $ releasePort ascPortPool rwaPort
 
 ensureAlive :: TVar AppState -> RunningWebApp -> IO ()
 ensureAlive tstate RunningWebApp {..} = do
