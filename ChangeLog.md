@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 2.3.1
 
 - Add `port-env-vars` option for webapp stanzas. Allows specifying additional
   environment variable names (e.g., `YESOD_PORT`) that receive the same
